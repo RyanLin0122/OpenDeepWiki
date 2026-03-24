@@ -101,15 +101,18 @@ namespace OpenDeepWiki.Agents
             else if (option.RequestType == AiRequestType.Anthropic)
             {
                 var apiKey = ResolveRequiredApiKey(option);
-                AnthropicClient client = new()
-                {
-                    ApiKey = apiKey,
-                    HttpClient = httpClient,
-                };
-                if (!string.IsNullOrWhiteSpace(option.Endpoint))
-                {
-                    client.BaseUrl = option.Endpoint;
-                }
+                AnthropicClient client = string.IsNullOrWhiteSpace(option.Endpoint)
+                    ? new AnthropicClient
+                    {
+                        ApiKey = apiKey,
+                        HttpClient = httpClient,
+                    }
+                    : new AnthropicClient
+                    {
+                        ApiKey = apiKey,
+                        HttpClient = httpClient,
+                        BaseUrl = option.Endpoint
+                    };
 
                 clientAgentOptions.ChatOptions ??= new ChatOptions();
                 clientAgentOptions.ChatOptions.ModelId = model;
