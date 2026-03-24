@@ -29,13 +29,13 @@ public class WikiGeneratorOptions
     /// Optional custom endpoint for catalog generation.
     /// If not set, falls back to the default AI endpoint.
     /// </summary>
-    public string? CatalogEndpoint { get; set; } = "https://api.routin.ai/";
+    public string? CatalogEndpoint { get; set; }
 
     /// <summary>
     /// Optional custom endpoint for content generation.
     /// If not set, falls back to the default AI endpoint.
     /// </summary>
-    public string? ContentEndpoint { get; set; } = "https://api.routin.ai/";
+    public string? ContentEndpoint { get; set; }
 
     /// <summary>
     /// Optional API key for catalog generation.
@@ -138,7 +138,7 @@ public class WikiGeneratorOptions
     /// Optional custom endpoint for translation.
     /// If not set, falls back to ContentEndpoint.
     /// </summary>
-    public string? TranslationEndpoint { get; set; } = "https://api.routin.ai/";
+    public string? TranslationEndpoint { get; set; }
 
     /// <summary>
     /// Optional API key for translation.
