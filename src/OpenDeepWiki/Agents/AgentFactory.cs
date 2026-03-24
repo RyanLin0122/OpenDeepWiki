@@ -50,7 +50,6 @@ namespace OpenDeepWiki.Agents
 
     public class AgentFactory(IOptions<AiRequestOptions> options)
     {
-        private const string DefaultEndpoint = "https://api.routin.ai/v1";
         private readonly AiRequestOptions? _options = options?.Value;
 
         /// <summary>
@@ -76,12 +75,7 @@ namespace OpenDeepWiki.Agents
             if (option.RequestType == AiRequestType.OpenAI)
             {
                 var apiKey = ResolveRequiredApiKey(option);
-                var clientOptions = new OpenAIClientOptions()
-                {
-                    Endpoint = new Uri(option.Endpoint ?? DefaultEndpoint),
-                    Transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(httpClient),
-                    NetworkTimeout = httpClient.Timeout
-                };
+                var clientOptions = BuildOpenAiClientOptions(option.Endpoint, httpClient);
 
                 var openAiClient = new OpenAIClient(
                     new ApiKeyCredential(apiKey),
@@ -94,12 +88,7 @@ namespace OpenDeepWiki.Agents
             else if (option.RequestType == AiRequestType.OpenAIResponses)
             {
                 var apiKey = ResolveRequiredApiKey(option);
-                var clientOptions = new OpenAIClientOptions()
-                {
-                    Endpoint = new Uri(option.Endpoint ?? DefaultEndpoint),
-                    Transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(httpClient),
-                    NetworkTimeout = httpClient.Timeout
-                };
+                var clientOptions = BuildOpenAiClientOptions(option.Endpoint, httpClient);
 
                 var openAiClient = new OpenAIClient(
                     new ApiKeyCredential(apiKey),
@@ -114,10 +103,13 @@ namespace OpenDeepWiki.Agents
                 var apiKey = ResolveRequiredApiKey(option);
                 AnthropicClient client = new()
                 {
-                    BaseUrl = option.Endpoint ?? DefaultEndpoint,
                     ApiKey = apiKey,
                     HttpClient = httpClient,
                 };
+                if (!string.IsNullOrWhiteSpace(option.Endpoint))
+                {
+                    client.BaseUrl = option.Endpoint;
+                }
 
                 clientAgentOptions.ChatOptions ??= new ChatOptions();
                 clientAgentOptions.ChatOptions.ModelId = model;
@@ -157,11 +149,6 @@ namespace OpenDeepWiki.Agents
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(resolved.Endpoint))
-            {
-                resolved.Endpoint = DefaultEndpoint;
-            }
-
             if (!resolved.RequestType.HasValue)
             {
                 resolved.RequestType = AiRequestType.OpenAI;
@@ -191,6 +178,22 @@ namespace OpenDeepWiki.Agents
             return Enum.TryParse<AiRequestType>(requestType, true, out var parsed)
                 ? parsed
                 : null;
+        }
+
+        private static OpenAIClientOptions BuildOpenAiClientOptions(string? endpoint, HttpClient httpClient)
+        {
+            var clientOptions = new OpenAIClientOptions
+            {
+                Transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(httpClient),
+                NetworkTimeout = httpClient.Timeout
+            };
+
+            if (!string.IsNullOrWhiteSpace(endpoint))
+            {
+                clientOptions.Endpoint = new Uri(endpoint);
+            }
+
+            return clientOptions;
         }
 
         /// <summary>
