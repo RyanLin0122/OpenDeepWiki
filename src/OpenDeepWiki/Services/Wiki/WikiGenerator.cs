@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using Anthropic.Models.Messages;
@@ -864,16 +865,18 @@ Please start executing the task.";
                 }
             }
 
-            throw new InvalidOperationException(
-                $"文档生成结果无效或为空，已重试{maxGenerationAttempts}次: {catalogPath}");
+            _logger.LogWarning(
+                "Document content generation skipped after {Attempts} attempts due to invalid or empty output. Path: {Path}, Title: {Title}",
+                maxGenerationAttempts, catalogPath, catalogTitle);
+            return;
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _logger.LogError(ex,
-                "Document content generation failed. Path: {Path}, Title: {Title}, Duration: {Duration}ms",
+            _logger.LogWarning(ex,
+                "Document content generation failed and will be skipped. Path: {Path}, Title: {Title}, Duration: {Duration}ms",
                 catalogPath, catalogTitle, stopwatch.ElapsedMilliseconds);
-            throw;
+            return;
         }
     }
 
@@ -987,7 +990,7 @@ Please start executing the task.";
                 {
                     ChatOptions = new ChatOptions()
                     {
-                        ToolMode = ChatToolMode.Auto,
+                        ToolMode = ResolveToolMode(operationName),
                         MaxOutputTokens = _options.MaxOutputTokens,
                         Tools = tools
                     }
@@ -1193,6 +1196,14 @@ Please start executing the task.";
             "AI agent execution failed after all retry attempts. Operation: {Operation}, Model: {Model}, Attempts: {Attempts}",
             operationName, model, _options.MaxRetryAttempts);
 
+        if (lastException is ToolCallNotExecutedException)
+        {
+            _logger.LogWarning(
+                "AI agent exhausted retries without tool calls; continuing workflow. Operation: {Operation}, Model: {Model}",
+                operationName, model);
+            return;
+        }
+
         throw new InvalidOperationException(
             $"AI agent execution failed after {_options.MaxRetryAttempts} attempts for operation '{operationName}'",
             lastException);
@@ -1231,6 +1242,42 @@ Please start executing the task.";
     {
         return operationName.StartsWith("DocumentContent:", StringComparison.OrdinalIgnoreCase)
                || operationName.StartsWith("CatalogGeneration", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ChatToolMode ResolveToolMode(string operationName)
+    {
+        if (!RequiresToolExecution(operationName))
+        {
+            return ChatToolMode.Auto;
+        }
+
+        // Prefer strict tool mode for document/catalog generation tasks.
+        // ChatToolMode may be represented as enum-like static members (not necessarily enum type)
+        // across different SDK/provider versions.
+        return TryGetChatToolMode("Required")
+               ?? TryGetChatToolMode("RequireAny")
+               ?? TryGetChatToolMode("Any")
+               ?? ChatToolMode.Auto;
+    }
+
+    private static ChatToolMode? TryGetChatToolMode(string memberName)
+    {
+        var modeType = typeof(ChatToolMode);
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static | BindingFlags.IgnoreCase;
+
+        var property = modeType.GetProperty(memberName, flags);
+        if (property?.PropertyType == modeType && property.GetValue(null) is ChatToolMode propertyValue)
+        {
+            return propertyValue;
+        }
+
+        var field = modeType.GetField(memberName, flags);
+        if (field?.FieldType == modeType && field.GetValue(null) is ChatToolMode fieldValue)
+        {
+            return fieldValue;
+        }
+
+        return null;
     }
 
     private sealed class ToolCallNotExecutedException(string message) : Exception(message);
