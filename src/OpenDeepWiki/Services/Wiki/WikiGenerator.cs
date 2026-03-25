@@ -985,7 +985,6 @@ Please start executing the task.";
                     "AI agent attempt {Attempt}/{MaxAttempts}. Operation: {Operation}, Model: {Model}",
                     retryCount + 1, _options.MaxRetryAttempts, operationName, model);
 
-                // Create chat options with the tools
                 var chatOptions = new ChatClientAgentOptions
                 {
                     ChatOptions = new ChatOptions()
@@ -996,14 +995,12 @@ Please start executing the task.";
                     }
                 };
 
-                // Create the chat client with tools using the AgentFactory
-                var (chatClient, aiTools) = _agentFactory.CreateChatClientWithTools(
+                var (chatClient, _) = _agentFactory.CreateChatClientWithTools(
                     model,
                     tools,
                     chatOptions,
                     requestOptions);
 
-                // Build the conversation with system prompt and user message
                 var messages = new List<ChatMessage>
                 {
                     new(ChatRole.System, systemPrompt),
@@ -1023,143 +1020,108 @@ Please start executing the task.";
                     })
                 };
 
-                // Use streaming response for real-time output
                 var contentBuilder = new StringBuilder();
                 UsageDetails? usageDetails = null;
                 var inputTokens = 0;
                 var outputTokens = 0;
                 var toolCallCount = 0;
                 var detectedToolCallKeys = new HashSet<string>(StringComparer.Ordinal);
+                string? finishReason = null;
 
                 _logger.LogDebug("Starting streaming response. Operation: {Operation}", operationName);
 
                 var thread = await chatClient.CreateSessionAsync(cancellationToken);
-                
+
                 await foreach (var update in chatClient.RunStreamingAsync(messages, thread, cancellationToken: cancellationToken))
                 {
-                    // Print streaming content
                     if (!string.IsNullOrEmpty(update.Text))
                     {
                         Console.Write(update.Text);
                         contentBuilder.Append(update.Text);
 
-                        // 记录AI输出（每100个字符记录一次，避免过于频繁）
                         if (contentBuilder.Length % 200 < update.Text.Length)
                         {
                             await LogProcessingAsync(step, update.Text, true, null, cancellationToken);
                         }
                     }
 
-                    if (update.RawRepresentation is StreamingChatCompletionUpdate chatCompletionUpdate &&
-                        chatCompletionUpdate.ToolCallUpdates.Count > 0)
+                    foreach (var (toolKey, functionName, source) in DetectToolCalls(update))
                     {
-                        foreach (var tool in chatCompletionUpdate.ToolCallUpdates)
-                        {
-                            if (!string.IsNullOrEmpty(tool.FunctionName))
-                            {
-                                var toolKey = !string.IsNullOrWhiteSpace(tool.ToolCallId)
-                                    ? tool.ToolCallId
-                                    : $"openai:{tool.FunctionName}:{tool.Index}";
-                                if (!detectedToolCallKeys.Add(toolKey))
-                                {
-                                    continue;
-                                }
-
-                                toolCallCount++;
-                                Console.WriteLine();
-                                Console.Write("Call Function:" + tool.FunctionName);
-                                _logger.LogDebug(
-                                    "Tool call #{CallNumber}: {FunctionName}. Operation: {Operation}",
-                                    toolCallCount, tool.FunctionName, operationName);
-
-                                // 记录工具调用
-                                await LogProcessingAsync(step, $"调用工具: {tool.FunctionName}", false, tool.FunctionName, cancellationToken);
-                            }
-                            else
-                            {
-                                Console.Write(" " +
-                                              Encoding.UTF8.GetString(tool.FunctionArgumentsUpdate.ToArray()));
-                            }
-                        }
-                    }
-
-                    // Fallback: some providers only expose tool_calls in raw delta payload;
-                    // parse raw JSON recursively to avoid false negatives in tool call counting.
-                    foreach (var (toolId, functionName) in ExtractToolCallsFromRawRepresentation(update.RawRepresentation))
-                    {
-                        var toolKey = !string.IsNullOrWhiteSpace(toolId)
-                            ? toolId
-                            : $"raw:{functionName}";
-
                         if (!detectedToolCallKeys.Add(toolKey))
                         {
                             continue;
                         }
 
                         toolCallCount++;
+                        var displayName = string.IsNullOrWhiteSpace(functionName) ? "unknown" : functionName;
+
+                        Console.WriteLine();
+                        Console.Write("Call Function:" + displayName);
+
                         _logger.LogDebug(
-                            "Tool call #{CallNumber} detected from raw payload: {FunctionName}. Operation: {Operation}",
+                            "Tool call #{CallNumber}: {FunctionName}. Operation: {Operation}. Source: {Source}",
                             toolCallCount,
-                            string.IsNullOrWhiteSpace(functionName) ? "unknown" : functionName,
-                            operationName);
+                            displayName,
+                            operationName,
+                            source);
+
+                        await LogProcessingAsync(step, $"调用工具: {displayName}", false, displayName, cancellationToken);
                     }
 
-                    // Track token usage if available
-                    if (update.RawRepresentation is ChatResponseUpdate chatResponseUpdate)
+                    finishReason ??= ExtractFinishReasonFromRawRepresentation(update.RawRepresentation);
+
+                    var usage = update.Contents.OfType<UsageContent>().FirstOrDefault()?.Details;
+                    if (usage != null)
                     {
-                        if (chatResponseUpdate.RawRepresentation is RawMessageStreamEvent
-                            {
-                                Value: RawMessageDeltaEvent deltaEvent
-                            })
-                        {
-                            inputTokens = (int)((int)(deltaEvent.Usage.InputTokens ?? inputTokens) +
-                                deltaEvent.Usage.CacheCreationInputTokens + deltaEvent.Usage.CacheReadInputTokens ?? 0);
-                            outputTokens = (int)(deltaEvent.Usage.OutputTokens);
-                        }
+                        usageDetails = usage;
+                        inputTokens = (int)usage.InputTokenCount;
+                        outputTokens = (int)usage.OutputTokenCount;
                     }
-                    else
+                    else if (TryExtractAnthropicUsage(update.RawRepresentation, ref inputTokens, ref outputTokens))
                     {
-                        var usage = update.Contents.OfType<UsageContent>().FirstOrDefault()?.Details;
-                        if (usage != null)
-                        {
-                            usageDetails = usage;
-                        }
+                        // Usage extracted from provider-specific raw payload.
                     }
                 }
 
-                // Print newline after streaming completes
                 Console.WriteLine();
 
                 attemptStopwatch.Stop();
 
-                // Log usage statistics
                 if (usageDetails != null)
                 {
                     _logger.LogInformation(
-                        "AI agent completed. Operation: {Operation}, Model: {Model}, InputTokens: {InputTokens}, OutputTokens: {OutputTokens}, TotalTokens: {TotalTokens}, ToolCalls: {ToolCalls}, Duration: {Duration}ms",
-                        operationName, model,
+                        "AI agent completed. Operation: {Operation}, Model: {Model}, InputTokens: {InputTokens}, OutputTokens: {OutputTokens}, TotalTokens: {TotalTokens}, ToolCalls: {ToolCalls}, FinishReason: {FinishReason}, Duration: {Duration}ms",
+                        operationName,
+                        model,
                         usageDetails.InputTokenCount,
                         usageDetails.OutputTokenCount,
                         usageDetails.TotalTokenCount,
                         toolCallCount,
+                        finishReason ?? "unknown",
                         attemptStopwatch.ElapsedMilliseconds);
                 }
                 else if (inputTokens > 0 || outputTokens > 0)
                 {
                     _logger.LogInformation(
-                        "AI agent completed. Operation: {Operation}, Model: {Model}, InputTokens: {InputTokens}, OutputTokens: {OutputTokens}, TotalTokens: {TotalTokens}, ToolCalls: {ToolCalls}, Duration: {Duration}ms",
-                        operationName, model,
+                        "AI agent completed. Operation: {Operation}, Model: {Model}, InputTokens: {InputTokens}, OutputTokens: {OutputTokens}, TotalTokens: {TotalTokens}, ToolCalls: {ToolCalls}, FinishReason: {FinishReason}, Duration: {Duration}ms",
+                        operationName,
+                        model,
                         inputTokens,
                         outputTokens,
                         inputTokens + outputTokens,
                         toolCallCount,
+                        finishReason ?? "unknown",
                         attemptStopwatch.ElapsedMilliseconds);
                 }
                 else
                 {
                     _logger.LogInformation(
-                        "AI agent completed. Operation: {Operation}, Model: {Model}, ToolCalls: {ToolCalls}, Duration: {Duration}ms (no usage data)",
-                        operationName, model, toolCallCount, attemptStopwatch.ElapsedMilliseconds);
+                        "AI agent completed. Operation: {Operation}, Model: {Model}, ToolCalls: {ToolCalls}, FinishReason: {FinishReason}, Duration: {Duration}ms (no usage data)",
+                        operationName,
+                        model,
+                        toolCallCount,
+                        finishReason ?? "unknown",
+                        attemptStopwatch.ElapsedMilliseconds);
                 }
 
                 var recordedInputTokens = (int)(usageDetails?.InputTokenCount ?? inputTokens);
@@ -1172,13 +1134,16 @@ Please start executing the task.";
                     cancellationToken);
 
                 _logger.LogDebug(
-                    "Streaming response completed. Operation: {Operation}, ContentLength: {Length}",
-                    operationName, contentBuilder.Length);
+                    "Streaming response completed. Operation: {Operation}, ContentLength: {Length}, ToolCalls: {ToolCalls}, FinishReason: {FinishReason}",
+                    operationName,
+                    contentBuilder.Length,
+                    toolCallCount,
+                    finishReason ?? "unknown");
 
                 if (RequiresToolExecution(operationName) && toolCallCount == 0)
                 {
                     throw new ToolCallNotExecutedException(
-                        $"Operation {operationName} completed without tool calls.");
+                        $"Operation {operationName} completed without tool calls. FinishReason: {finishReason ?? "unknown"}.");
                 }
 
                 return;
@@ -1193,30 +1158,39 @@ Please start executing the task.";
                 _logger.LogWarning(
                     ex,
                     "AI agent attempt {Attempt}/{MaxAttempts} failed with transient error. Operation: {Operation}, Model: {Model}, Duration: {Duration}ms, ErrorType: {ErrorType}",
-                    retryCount, _options.MaxRetryAttempts, operationName, model, attemptStopwatch.ElapsedMilliseconds, ex.GetType().Name);
+                    retryCount,
+                    _options.MaxRetryAttempts,
+                    operationName,
+                    model,
+                    attemptStopwatch.ElapsedMilliseconds,
+                    ex.GetType().Name);
 
                 if (retryCount < _options.MaxRetryAttempts)
                 {
-                    // Exponential backoff with jitter: base_delay * 2^(attempt-1) + random(0, 1000ms)
                     var exponentialDelay = _options.RetryDelayMs * Math.Pow(2, retryCount - 1);
                     var jitter = Random.Shared.Next(0, 1000);
-                    var totalDelay = (int)Math.Min(exponentialDelay + jitter, 60000); // Cap at 60 seconds
+                    var totalDelay = (int)Math.Min(exponentialDelay + jitter, 60000);
 
                     _logger.LogInformation(
                         "Retrying AI agent in {Delay}ms (exponential backoff). Operation: {Operation}, Attempt: {NextAttempt}/{MaxAttempts}",
-                        totalDelay, operationName, retryCount + 1, _options.MaxRetryAttempts);
+                        totalDelay,
+                        operationName,
+                        retryCount + 1,
+                        _options.MaxRetryAttempts);
 
                     await Task.Delay(totalDelay, cancellationToken);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Non-transient exception, don't retry
                 attemptStopwatch.Stop();
                 _logger.LogError(
                     ex,
                     "AI agent failed with non-transient error. Operation: {Operation}, Model: {Model}, Duration: {Duration}ms, ErrorType: {ErrorType}",
-                    operationName, model, attemptStopwatch.ElapsedMilliseconds, ex.GetType().Name);
+                    operationName,
+                    model,
+                    attemptStopwatch.ElapsedMilliseconds,
+                    ex.GetType().Name);
                 throw;
             }
         }
@@ -1224,13 +1198,16 @@ Please start executing the task.";
         _logger.LogError(
             lastException,
             "AI agent execution failed after all retry attempts. Operation: {Operation}, Model: {Model}, Attempts: {Attempts}",
-            operationName, model, _options.MaxRetryAttempts);
+            operationName,
+            model,
+            _options.MaxRetryAttempts);
 
         if (lastException is ToolCallNotExecutedException)
         {
             _logger.LogWarning(
                 "AI agent exhausted retries without tool calls; continuing workflow. Operation: {Operation}, Model: {Model}",
-                operationName, model);
+                operationName,
+                model);
             return;
         }
 
@@ -1310,6 +1287,51 @@ Please start executing the task.";
         return null;
     }
 
+    private static IEnumerable<(string ToolKey, string FunctionName, string Source)> DetectToolCalls(Microsoft.Extensions.AI.ChatResponseUpdate update)
+    {
+        var toolCalls = new List<(string ToolKey, string FunctionName, string Source)>();
+
+        foreach (var functionCall in update.Contents.OfType<FunctionCallContent>())
+        {
+            var functionName = functionCall.Name ?? string.Empty;
+            var toolKey = !string.IsNullOrWhiteSpace(functionCall.CallId)
+                ? functionCall.CallId!
+                : $"function-content:{functionName}:{toolCalls.Count}";
+
+            toolCalls.Add((toolKey, functionName, "FunctionCallContent"));
+        }
+
+        if (update.RawRepresentation is StreamingChatCompletionUpdate streamingChatCompletionUpdate &&
+            streamingChatCompletionUpdate.ToolCallUpdates.Count > 0)
+        {
+            foreach (var tool in streamingChatCompletionUpdate.ToolCallUpdates)
+            {
+                if (string.IsNullOrWhiteSpace(tool.FunctionName) && string.IsNullOrWhiteSpace(tool.ToolCallId))
+                {
+                    continue;
+                }
+
+                var functionName = tool.FunctionName ?? string.Empty;
+                var toolKey = !string.IsNullOrWhiteSpace(tool.ToolCallId)
+                    ? tool.ToolCallId!
+                    : $"openai:{functionName}:{tool.Index}";
+
+                toolCalls.Add((toolKey, functionName, "StreamingChatCompletionUpdate"));
+            }
+        }
+
+        foreach (var (toolId, functionName) in ExtractToolCallsFromRawRepresentation(update.RawRepresentation))
+        {
+            var toolKey = !string.IsNullOrWhiteSpace(toolId)
+                ? toolId
+                : $"raw:{functionName}";
+
+            toolCalls.Add((toolKey, functionName, "RawRepresentation"));
+        }
+
+        return toolCalls;
+    }
+
     private static IEnumerable<(string ToolId, string FunctionName)> ExtractToolCallsFromRawRepresentation(object? rawRepresentation)
     {
         if (rawRepresentation == null)
@@ -1337,28 +1359,7 @@ Please start executing the task.";
     {
         if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
         {
-            if (element.TryGetProperty("tool_calls", out var toolCallsElement) &&
-                toolCallsElement.ValueKind == System.Text.Json.JsonValueKind.Array)
-            {
-                foreach (var item in toolCallsElement.EnumerateArray())
-                {
-                    var toolId = item.TryGetProperty("id", out var idElement) &&
-                                 idElement.ValueKind == System.Text.Json.JsonValueKind.String
-                        ? idElement.GetString() ?? string.Empty
-                        : string.Empty;
-
-                    var functionName = string.Empty;
-                    if (item.TryGetProperty("function", out var functionElement) &&
-                        functionElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
-                        functionElement.TryGetProperty("name", out var nameElement) &&
-                        nameElement.ValueKind == System.Text.Json.JsonValueKind.String)
-                    {
-                        functionName = nameElement.GetString() ?? string.Empty;
-                    }
-
-                    toolCalls.Add((toolId, functionName));
-                }
-            }
+            CollectToolCallsFromKnownProperties(element, toolCalls);
 
             foreach (var property in element.EnumerateObject())
             {
@@ -1377,6 +1378,179 @@ Please start executing the task.";
         {
             CollectToolCallsFromJson(item, toolCalls);
         }
+    }
+
+    private static void CollectToolCallsFromKnownProperties(
+        System.Text.Json.JsonElement element,
+        List<(string ToolId, string FunctionName)> toolCalls)
+    {
+        var candidatePropertyNames = new[]
+        {
+            "tool_calls",
+            "toolCalls",
+            "ToolCalls",
+            "toolCallUpdates",
+            "ToolCallUpdates"
+        };
+
+        foreach (var propertyName in candidatePropertyNames)
+        {
+            if (!element.TryGetProperty(propertyName, out var toolCallsElement) ||
+                toolCallsElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var item in toolCallsElement.EnumerateArray())
+            {
+                var toolId = TryGetString(item, "id")
+                             ?? TryGetString(item, "toolCallId")
+                             ?? TryGetString(item, "ToolCallId")
+                             ?? string.Empty;
+
+                var functionName = TryGetString(item, "functionName")
+                                   ?? TryGetString(item, "FunctionName")
+                                   ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(functionName) &&
+                    TryGetPropertyCaseInsensitive(item, "function", out var functionElement) &&
+                    functionElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    functionName = TryGetString(functionElement, "name")
+                                   ?? TryGetString(functionElement, "Name")
+                                   ?? string.Empty;
+                }
+
+                if (!string.IsNullOrWhiteSpace(toolId) || !string.IsNullOrWhiteSpace(functionName))
+                {
+                    toolCalls.Add((toolId, functionName));
+                }
+            }
+        }
+
+        if (TryGetPropertyCaseInsensitive(element, "function_call", out var functionCallElement) &&
+            functionCallElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            var functionName = TryGetString(functionCallElement, "name")
+                               ?? TryGetString(functionCallElement, "Name")
+                               ?? string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(functionName))
+            {
+                toolCalls.Add((string.Empty, functionName));
+            }
+        }
+    }
+
+    private static bool TryGetAnthropicUsage(object? rawRepresentation, ref int inputTokens, ref int outputTokens)
+    {
+        if (rawRepresentation is not OpenAI.Responses.ChatResponseUpdate chatResponseUpdate)
+        {
+            return false;
+        }
+
+        if (chatResponseUpdate.RawRepresentation is not RawMessageStreamEvent
+            {
+                Value: RawMessageDeltaEvent deltaEvent
+            })
+        {
+            return false;
+        }
+
+        inputTokens = (int)((deltaEvent.Usage.InputTokens ?? inputTokens)
+            + (deltaEvent.Usage.CacheCreationInputTokens ?? 0)
+            + (deltaEvent.Usage.CacheReadInputTokens ?? 0));
+        outputTokens = (int)(deltaEvent.Usage.OutputTokens ?? outputTokens);
+        return true;
+    }
+
+    private static string? ExtractFinishReasonFromRawRepresentation(object? rawRepresentation)
+    {
+        if (rawRepresentation == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(rawRepresentation);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return FindFirstStringProperty(doc.RootElement, "finish_reason", "finishReason", "FinishReason");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? FindFirstStringProperty(System.Text.Json.JsonElement element, params string[] names)
+    {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            foreach (var name in names)
+            {
+                if (element.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    return value.GetString();
+                }
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                var nested = FindFirstStringProperty(property.Value, names);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+
+            return null;
+        }
+
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var item in element.EnumerateArray())
+        {
+            var nested = FindFirstStringProperty(item, names);
+            if (!string.IsNullOrWhiteSpace(nested))
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryGetPropertyCaseInsensitive(
+        System.Text.Json.JsonElement element,
+        string propertyName,
+        out System.Text.Json.JsonElement value)
+    {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static string? TryGetString(System.Text.Json.JsonElement element, string propertyName)
+    {
+        return TryGetPropertyCaseInsensitive(element, propertyName, out var value) &&
+               value.ValueKind == System.Text.Json.JsonValueKind.String
+            ? value.GetString()
+            : null;
     }
 
     private sealed class ToolCallNotExecutedException(string message) : Exception(message);
