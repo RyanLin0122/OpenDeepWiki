@@ -9,7 +9,7 @@
     restart: unless-stopped
     environment:
       # ASP.NET Core 环境
-      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_ENVIRONMENT=Development
 
       # 服务监听地址
       - URLS=http://+:8080
