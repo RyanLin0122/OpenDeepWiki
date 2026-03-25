@@ -1,4 +1,5 @@
 ﻿using System.Net;
+using System.Text;
 
 namespace OpenDeepWiki.Agents;
 
@@ -76,10 +77,15 @@ public class LoggingHttpHandler(HttpMessageHandler innerHandler) : DelegatingHan
             Console.WriteLine(
                 $"[{requestId}] <<< 响应完成: {(int)response.StatusCode} {response.StatusCode} | 耗时: {totalElapsed.TotalMilliseconds:F0}ms | 尝试次数: {attempt}");
 
-            if (!response.IsSuccessStatusCode)
+            var responseContent = await ReadAndPreserveContentAsync(response, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(responseContent))
             {
-                var content = await response.Content.ReadAsStringAsync(cancellationToken);
-                Console.WriteLine($"[{requestId}] !!! 错误响应: {content[..Math.Min(500, content.Length)]}");
+                WriteYellowLine($"[{requestId}] <<< 响应JSON: {responseContent}");
+            }
+
+            if (!response.IsSuccessStatusCode && !string.IsNullOrWhiteSpace(responseContent))
+            {
+                Console.WriteLine($"[{requestId}] !!! 错误响应: {responseContent[..Math.Min(500, responseContent.Length)]}");
             }
         }
 
@@ -167,5 +173,50 @@ public class LoggingHttpHandler(HttpMessageHandler innerHandler) : DelegatingHan
         }
 
         return clone;
+    }
+
+    private static async Task<string?> ReadAndPreserveContentAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.Content == null)
+        {
+            return null;
+        }
+
+        var contentType = response.Content.Headers.ContentType;
+        var mediaType = contentType?.MediaType;
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        var charset = contentType?.CharSet;
+        Encoding encoding;
+        if (!string.IsNullOrWhiteSpace(charset))
+        {
+            try
+            {
+                encoding = Encoding.GetEncoding(charset);
+            }
+            catch
+            {
+                encoding = Encoding.UTF8;
+            }
+        }
+        else
+        {
+            encoding = Encoding.UTF8;
+        }
+
+        response.Content = mediaType != null
+            ? new StringContent(content, encoding, mediaType)
+            : new StringContent(content, encoding);
+
+        return content;
+    }
+
+    private static void WriteYellowLine(string message)
+    {
+        const string yellow = "\u001b[33m";
+        const string reset = "\u001b[0m";
+        Console.WriteLine($"{yellow}{message}{reset}");
     }
 }
