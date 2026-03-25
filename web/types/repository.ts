@@ -135,7 +135,7 @@ export interface UpdateVisibilityResponse {
 }
 
 // Processing log types
-export type ProcessingStep = "Workspace" | "Catalog" | "Content" | "Complete";
+export type ProcessingStep = "Workspace" | "Catalog" | "Content" | "Translation" | "MindMap" | "Complete";
 
 // 思维导图状态
 export type MindMapStatus = "Pending" | "Processing" | "Completed" | "Failed";
@@ -172,7 +172,9 @@ export const ProcessingStepMap: Record<number, ProcessingStep> = {
   0: "Workspace",
   1: "Catalog",
   2: "Content",
-  3: "Complete",
+  3: "Translation",
+  4: "MindMap",
+  5: "Complete",
 };
 
 export interface ProcessingLogItem {
@@ -192,6 +194,8 @@ export interface ProcessingLogResponse {
   currentStepName: ProcessingStep;
   totalDocuments: number;
   completedDocuments: number;
+  totalTranslationDocuments: number;
+  completedTranslationDocuments: number;
   startedAt: string | null;
   logs: ProcessingLogItem[];
 }

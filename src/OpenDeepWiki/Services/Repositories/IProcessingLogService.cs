@@ -50,6 +50,16 @@ public class ProcessingLogResponse
     /// 文档生成进度 - 已完成数
     /// </summary>
     public int CompletedDocuments { get; set; }
+
+    /// <summary>
+    /// 文档翻译进度 - 总数
+    /// </summary>
+    public int TotalTranslationDocuments { get; set; }
+
+    /// <summary>
+    /// 文档翻译进度 - 已完成数
+    /// </summary>
+    public int CompletedTranslationDocuments { get; set; }
     
     /// <summary>
     /// 处理开始时间（第一条日志的时间）
