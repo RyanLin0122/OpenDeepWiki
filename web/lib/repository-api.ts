@@ -39,8 +39,16 @@ export async function fetchRepoBranches(owner: string, repo: string) {
   const url = buildApiUrl(
     `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
   );
+  console.debug("[WIKI][repository-api] fetchRepoBranches:start", { owner, repo, url });
 
   const response = await fetch(url, { cache: "no-store", headers: await getSSRAuthHeaders() });
+  console.debug("[WIKI][repository-api] fetchRepoBranches:response", {
+    owner,
+    repo,
+    url,
+    ok: response.ok,
+    status: response.status,
+  });
 
   if (!response.ok) {
     throw new Error("Failed to fetch repository branches");
@@ -76,8 +84,18 @@ export async function fetchRepoTree(owner: string, repo: string, branch?: string
   const url = buildApiUrl(
     `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/tree${queryString ? `?${queryString}` : ""}`,
   );
+  console.debug("[WIKI][repository-api] fetchRepoTree:start", { owner, repo, branch, lang, url });
 
   const response = await fetch(url, { cache: "no-store", headers: await getSSRAuthHeaders() });
+  console.debug("[WIKI][repository-api] fetchRepoTree:response", {
+    owner,
+    repo,
+    branch,
+    lang,
+    url,
+    ok: response.ok,
+    status: response.status,
+  });
 
   if (!response.ok) {
     throw new Error("Failed to fetch repository tree");
@@ -96,8 +114,19 @@ export async function fetchRepoDoc(owner: string, repo: string, slug: string, br
   const url = buildApiUrl(
     `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/docs/${encodedSlug}${queryString ? `?${queryString}` : ""}`,
   );
+  console.debug("[WIKI][repository-api] fetchRepoDoc:start", { owner, repo, slug, branch, lang, url });
 
   const response = await fetch(url, { cache: "no-store", headers: await getSSRAuthHeaders() });
+  console.debug("[WIKI][repository-api] fetchRepoDoc:response", {
+    owner,
+    repo,
+    slug,
+    branch,
+    lang,
+    url,
+    ok: response.ok,
+    status: response.status,
+  });
 
   if (!response.ok) {
     throw new Error("Failed to fetch repository doc");
@@ -245,8 +274,16 @@ export async function checkGitHubRepo(
   const url = buildApiUrl(
     `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/check`
   );
+  console.debug("[WIKI][repository-api] checkGitHubRepo:start", { owner, repo, url });
 
   const response = await fetch(url, { cache: "no-store", headers: await getSSRAuthHeaders() });
+  console.debug("[WIKI][repository-api] checkGitHubRepo:response", {
+    owner,
+    repo,
+    url,
+    ok: response.ok,
+    status: response.status,
+  });
 
   if (!response.ok) {
     return {
