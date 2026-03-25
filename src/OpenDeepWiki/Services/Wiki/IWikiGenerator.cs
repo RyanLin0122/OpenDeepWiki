@@ -41,7 +41,7 @@ public interface IWikiGenerator
     /// <param name="workspace">The prepared repository workspace.</param>
     /// <param name="branchLanguage">The branch language to generate documents for.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task GenerateDocumentsAsync(
+    Task<DocumentGenerationSummary> GenerateDocumentsAsync(
         RepositoryWorkspace workspace,
         BranchLanguage branchLanguage,
         CancellationToken cancellationToken = default);
@@ -87,4 +87,11 @@ public interface IWikiGenerator
         BranchLanguage sourceBranchLanguage,
         string targetLanguageCode,
         CancellationToken cancellationToken = default);
+}
+
+public sealed class DocumentGenerationSummary
+{
+    public int TotalCount { get; init; }
+    public int SuccessCount { get; init; }
+    public int FailedCount { get; init; }
 }

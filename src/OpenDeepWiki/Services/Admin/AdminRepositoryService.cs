@@ -158,6 +158,9 @@ public class AdminRepositoryService : IAdminRepositoryService
         RepositoryStatus.Processing => "处理中",
         RepositoryStatus.Completed => "已完成",
         RepositoryStatus.Failed => "失败",
+        RepositoryStatus.CompletedNoDocs => "已完成（无文档）",
+        RepositoryStatus.Empty => "空仓库",
+        RepositoryStatus.PartialFailed => "部分失败",
         _ => "未知"
     };
 
