@@ -122,7 +122,11 @@ export default async function RepoLayout({ children, params }: RepoLayoutProps) 
       <RepositoryProcessingStatus
         owner={decodedOwner}
         repo={decodedRepo}
-        status="Completed"
+        status={
+          tree.statusName === "CompletedNoDocs" || tree.statusName === "Empty"
+            ? tree.statusName
+            : "CompletedNoDocs"
+        }
       />
     );
   }

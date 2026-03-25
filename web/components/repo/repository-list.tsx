@@ -23,6 +23,7 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
   ExternalLink,
   RefreshCw,
   GitBranch,
@@ -56,6 +57,21 @@ const STATUS_CONFIG: Record<RepositoryStatus, {
     icon: CheckCircle2,
     className: "text-green-500 bg-green-500/10",
     labelKey: "completed",
+  },
+  CompletedNoDocs: {
+    icon: AlertTriangle,
+    className: "text-amber-500 bg-amber-500/10",
+    labelKey: "completedNoDocs",
+  },
+  Empty: {
+    icon: AlertTriangle,
+    className: "text-slate-500 bg-slate-500/10",
+    labelKey: "empty",
+  },
+  PartialFailed: {
+    icon: AlertTriangle,
+    className: "text-orange-500 bg-orange-500/10",
+    labelKey: "partialFailed",
   },
   Failed: {
     icon: XCircle,
@@ -157,7 +173,7 @@ function RepositoryCard({
               hasPassword={repo.hasPassword}
               onVisibilityChange={handleVisibilityChange}
             />
-            {repo.statusName === "Completed" && (
+            {repo.statusName === "Completed" && repo.hasDocs && (
               <Button variant="outline" size="sm" asChild>
                 <Link href={wikiUrl} onClick={handleViewWikiClick}>
                   <ExternalLink className="mr-1.5 h-3.5 w-3.5" />

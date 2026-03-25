@@ -145,6 +145,9 @@
       "pending": "等待处理",
       "processing": "正在生成",
       "completed": "已完成",
+      "completedNoDocs": "已完成（无文档）",
+      "empty": "空仓库",
+      "partialFailed": "部分失败",
       "failed": "生成失败",
       "pendingDescription": "仓库已提交，正在等待处理队列...",
       "processingDescription": "AI 正在分析仓库并生成 Wiki 文档，请稍候...",
@@ -165,6 +168,7 @@
       "remaining": "剩余",
       "errorLogs": "错误日志",
       "failedTip": "Wiki 生成遇到错误。这可能是由于仓库大小、访问权限问题或临时服务问题导致的。",
+      "completedNoDocsTip": "处理已完成，但目前没有可展示的文档内容。",
       "completedTip": "正在跳转到文档页面...",
       "steps": {
         "workspace": "准备仓库",

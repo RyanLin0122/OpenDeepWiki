@@ -121,7 +121,7 @@ public class RepositoryProcessingWorker(
 
             try
             {
-                await ProcessRepositoryAsync(
+                var summary = await ProcessRepositoryAsync(
                     repository, 
                     context, 
                     repositoryAnalyzer, 
@@ -130,17 +130,16 @@ public class RepositoryProcessingWorker(
                     stoppingToken);
 
                 stopwatch.Stop();
-                // Transition to Completed status
-                repository.Status = RepositoryStatus.Completed;
+                repository.Status = await DetermineTerminalStatusAsync(repository.Id, context, summary, stoppingToken);
                 logger.LogInformation(
-                    "Repository processing completed successfully. RepositoryId: {RepositoryId}, Repository: {Org}/{Repo}, Duration: {Duration}ms",
-                    repository.Id, repository.OrgName, repository.RepoName, stopwatch.ElapsedMilliseconds);
+                    "Repository processing finished. RepositoryId: {RepositoryId}, Repository: {Org}/{Repo}, Status: {Status}, Duration: {Duration}ms, SuccessBranches: {SuccessBranches}, FailedBranches: {FailedBranches}",
+                    repository.Id, repository.OrgName, repository.RepoName, repository.Status, stopwatch.ElapsedMilliseconds, summary.SucceededBranches, summary.FailedBranches);
 
                 // 记录完成
                 if (processingLogService != null)
                 {
                     await processingLogService.LogAsync(repository.Id, ProcessingStep.Complete, 
-                        $"仓库处理完成，总耗时 {stopwatch.ElapsedMilliseconds}ms", cancellationToken: stoppingToken);
+                        $"仓库处理结束，状态: {repository.Status}，总耗时 {stopwatch.ElapsedMilliseconds}ms", cancellationToken: stoppingToken);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -178,7 +177,7 @@ public class RepositoryProcessingWorker(
     /// <summary>
     /// Processes a single repository: prepares workspace, generates wiki content.
     /// </summary>
-    private async Task ProcessRepositoryAsync(
+    private async Task<RepositoryProcessSummary> ProcessRepositoryAsync(
         Repository repository,
         IContext context,
         IRepositoryAnalyzer repositoryAnalyzer,
@@ -196,26 +195,103 @@ public class RepositoryProcessingWorker(
             logger.LogWarning(
                 "No branches found for repository. RepositoryId: {RepositoryId}, Repository: {Org}/{Repo}",
                 repository.Id, repository.OrgName, repository.RepoName);
-            return;
+            return new RepositoryProcessSummary();
         }
 
         logger.LogInformation(
             "Found {BranchCount} branches to process for repository {Org}/{Repo}",
             branches.Count, repository.OrgName, repository.RepoName);
 
+        var summary = new RepositoryProcessSummary();
+
         foreach (var branch in branches)
         {
             stoppingToken.ThrowIfCancellationRequested();
 
-            await ProcessBranchAsync(
-                repository,
-                branch,
-                context,
-                repositoryAnalyzer,
-                wikiGenerator,
-                processingLogService,
-                stoppingToken);
+            try
+            {
+                await ProcessBranchAsync(
+                    repository,
+                    branch,
+                    context,
+                    repositoryAnalyzer,
+                    wikiGenerator,
+                    processingLogService,
+                    stoppingToken);
+                summary.SucceededBranches++;
+            }
+            catch (Exception ex)
+            {
+                summary.FailedBranches++;
+                logger.LogError(ex,
+                    "Branch processing failed but repository will continue. RepositoryId: {RepositoryId}, Repository: {Org}/{Repo}, Branch: {Branch}",
+                    repository.Id, repository.OrgName, repository.RepoName, branch.BranchName);
+
+                if (processingLogService != null)
+                {
+                    await processingLogService.LogAsync(repository.Id, ProcessingStep.Content,
+                        $"分支处理失败: {branch.BranchName} - {ex.Message}", cancellationToken: stoppingToken);
+                }
+            }
         }
+
+        return summary;
+    }
+
+    private async Task<RepositoryStatus> DetermineTerminalStatusAsync(
+        string repositoryId,
+        IContext context,
+        RepositoryProcessSummary summary,
+        CancellationToken stoppingToken)
+    {
+        if (summary.FailedBranches > 0 && summary.SucceededBranches > 0)
+        {
+            return RepositoryStatus.PartialFailed;
+        }
+
+        if (summary.FailedBranches > 0)
+        {
+            return RepositoryStatus.Failed;
+        }
+
+        var hasAnyBranch = await context.RepositoryBranches
+            .AsNoTracking()
+            .AnyAsync(b => b.RepositoryId == repositoryId, stoppingToken);
+        if (!hasAnyBranch)
+        {
+            return RepositoryStatus.Empty;
+        }
+
+        var hasAnyLanguage = await context.BranchLanguages
+            .AsNoTracking()
+            .Join(
+                context.RepositoryBranches.AsNoTracking().Where(b => b.RepositoryId == repositoryId),
+                l => l.RepositoryBranchId,
+                b => b.Id,
+                (l, b) => l.Id)
+            .AnyAsync(stoppingToken);
+
+        if (!hasAnyLanguage)
+        {
+            return RepositoryStatus.Empty;
+        }
+
+        var hasAnyCatalog = await context.DocCatalogs
+            .AsNoTracking()
+            .Where(c => !c.IsDeleted)
+            .Join(
+                context.BranchLanguages.AsNoTracking(),
+                c => c.BranchLanguageId,
+                l => l.Id,
+                (c, l) => l)
+            .Join(
+                context.RepositoryBranches.AsNoTracking().Where(b => b.RepositoryId == repositoryId),
+                l => l.RepositoryBranchId,
+                b => b.Id,
+                (l, b) => b.Id)
+            .AnyAsync(stoppingToken);
+
+        return hasAnyCatalog ? RepositoryStatus.Completed : RepositoryStatus.CompletedNoDocs;
     }
 
     /// <summary>
@@ -419,4 +495,10 @@ public class RepositoryProcessingWorker(
             throw;
         }
     }
+}
+
+internal sealed class RepositoryProcessSummary
+{
+    public int SucceededBranches { get; set; }
+    public int FailedBranches { get; set; }
 }

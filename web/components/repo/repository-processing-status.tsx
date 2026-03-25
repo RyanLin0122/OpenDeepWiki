@@ -14,6 +14,7 @@ import {
   Sparkles,
   Terminal,
   Wrench,
+  AlertTriangle,
 } from "lucide-react";
 import { useTranslations } from "@/hooks/use-translations";
 import { fetchRepoStatus, fetchProcessingLogs, regenerateRepository } from "@/lib/repository-api";
@@ -53,6 +54,27 @@ const statusConfig = {
     bgClass: "bg-green-500/10",
     borderClass: "border-green-500/20",
     glowClass: "shadow-green-500/20",
+  },
+  CompletedNoDocs: {
+    icon: AlertTriangle,
+    colorClass: "text-amber-500",
+    bgClass: "bg-amber-500/10",
+    borderClass: "border-amber-500/20",
+    glowClass: "shadow-amber-500/20",
+  },
+  Empty: {
+    icon: AlertTriangle,
+    colorClass: "text-slate-500",
+    bgClass: "bg-slate-500/10",
+    borderClass: "border-slate-500/20",
+    glowClass: "shadow-slate-500/20",
+  },
+  PartialFailed: {
+    icon: AlertTriangle,
+    colorClass: "text-orange-500",
+    bgClass: "bg-orange-500/10",
+    borderClass: "border-orange-500/20",
+    glowClass: "shadow-orange-500/20",
   },
   Failed: {
     icon: XCircle,
@@ -196,7 +218,12 @@ export function RepositoryProcessingStatus({
       }
 
       // 如果失败了，停止轮询
-      if (statusResponse.statusName === "Failed") {
+      if (
+        statusResponse.statusName === "Failed" ||
+        statusResponse.statusName === "PartialFailed" ||
+        statusResponse.statusName === "CompletedNoDocs" ||
+        statusResponse.statusName === "Empty"
+      ) {
         setIsPolling(false);
       }
     } catch (error) {
@@ -629,11 +656,18 @@ export function RepositoryProcessingStatus({
         )}
 
         {/* 完成状态 */}
-        {status === "Completed" && (
+        {(status === "Completed" || status === "CompletedNoDocs" || status === "Empty") && (
           <div className="text-center">
-            <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-3 text-sm text-green-500">
-              {t("home.repository.status.completedTip") ||
-                "Redirecting to documentation..."}
+            <div
+              className={
+                status === "Completed"
+                  ? "bg-green-500/10 border border-green-500/20 rounded-lg p-3 text-sm text-green-500"
+                  : "bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 text-sm text-amber-500"
+              }
+            >
+              {status === "Completed"
+                ? (t("home.repository.status.completedTip") || "Redirecting to documentation...")
+                : (t("home.repository.status.completedNoDocsTip") || "Completed, but no documents are available yet.")}
             </div>
           </div>
         )}
