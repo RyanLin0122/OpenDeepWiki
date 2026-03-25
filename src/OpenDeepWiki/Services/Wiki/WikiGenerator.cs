@@ -1029,6 +1029,7 @@ Please start executing the task.";
                 var inputTokens = 0;
                 var outputTokens = 0;
                 var toolCallCount = 0;
+                var detectedToolCallKeys = new HashSet<string>(StringComparer.Ordinal);
 
                 _logger.LogDebug("Starting streaming response. Operation: {Operation}", operationName);
 
@@ -1056,6 +1057,14 @@ Please start executing the task.";
                         {
                             if (!string.IsNullOrEmpty(tool.FunctionName))
                             {
+                                var toolKey = !string.IsNullOrWhiteSpace(tool.ToolCallId)
+                                    ? tool.ToolCallId
+                                    : $"openai:{tool.FunctionName}:{tool.Index}";
+                                if (!detectedToolCallKeys.Add(toolKey))
+                                {
+                                    continue;
+                                }
+
                                 toolCallCount++;
                                 Console.WriteLine();
                                 Console.Write("Call Function:" + tool.FunctionName);
@@ -1072,6 +1081,27 @@ Please start executing the task.";
                                               Encoding.UTF8.GetString(tool.FunctionArgumentsUpdate.ToArray()));
                             }
                         }
+                    }
+
+                    // Fallback: some providers only expose tool_calls in raw delta payload;
+                    // parse raw JSON recursively to avoid false negatives in tool call counting.
+                    foreach (var (toolId, functionName) in ExtractToolCallsFromRawRepresentation(update.RawRepresentation))
+                    {
+                        var toolKey = !string.IsNullOrWhiteSpace(toolId)
+                            ? toolId
+                            : $"raw:{functionName}";
+
+                        if (!detectedToolCallKeys.Add(toolKey))
+                        {
+                            continue;
+                        }
+
+                        toolCallCount++;
+                        _logger.LogDebug(
+                            "Tool call #{CallNumber} detected from raw payload: {FunctionName}. Operation: {Operation}",
+                            toolCallCount,
+                            string.IsNullOrWhiteSpace(functionName) ? "unknown" : functionName,
+                            operationName);
                     }
 
                     // Track token usage if available
@@ -1278,6 +1308,75 @@ Please start executing the task.";
         }
 
         return null;
+    }
+
+    private static IEnumerable<(string ToolId, string FunctionName)> ExtractToolCallsFromRawRepresentation(object? rawRepresentation)
+    {
+        if (rawRepresentation == null)
+        {
+            return Array.Empty<(string ToolId, string FunctionName)>();
+        }
+
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(rawRepresentation);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var toolCalls = new List<(string ToolId, string FunctionName)>();
+            CollectToolCallsFromJson(doc.RootElement, toolCalls);
+            return toolCalls;
+        }
+        catch
+        {
+            return Array.Empty<(string ToolId, string FunctionName)>();
+        }
+    }
+
+    private static void CollectToolCallsFromJson(
+        System.Text.Json.JsonElement element,
+        List<(string ToolId, string FunctionName)> toolCalls)
+    {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("tool_calls", out var toolCallsElement) &&
+                toolCallsElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in toolCallsElement.EnumerateArray())
+                {
+                    var toolId = item.TryGetProperty("id", out var idElement) &&
+                                 idElement.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? idElement.GetString() ?? string.Empty
+                        : string.Empty;
+
+                    var functionName = string.Empty;
+                    if (item.TryGetProperty("function", out var functionElement) &&
+                        functionElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                        functionElement.TryGetProperty("name", out var nameElement) &&
+                        nameElement.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        functionName = nameElement.GetString() ?? string.Empty;
+                    }
+
+                    toolCalls.Add((toolId, functionName));
+                }
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                CollectToolCallsFromJson(property.Value, toolCalls);
+            }
+
+            return;
+        }
+
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var item in element.EnumerateArray())
+        {
+            CollectToolCallsFromJson(item, toolCalls);
+        }
     }
 
     private sealed class ToolCallNotExecutedException(string message) : Exception(message);
