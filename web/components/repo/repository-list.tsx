@@ -12,8 +12,9 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslations } from "@/hooks/use-translations";
-import { fetchRepositoryList, regenerateRepository } from "@/lib/repository-api";
+import { fetchProcessingLogs, fetchRepositoryList, regenerateRepository } from "@/lib/repository-api";
 import type {
+  ProcessingLogResponse,
   RepositoryItemResponse,
   RepositorySourceType,
   RepositoryStatus,
@@ -31,11 +32,13 @@ import {
 import { cn } from "@/lib/utils";
 import { buildRepoBasePath } from "@/lib/repo-route";
 import { VisibilityToggle } from "@/components/repo/visibility-toggle";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 
 interface RepositoryListProps {
   ownerId?: string;
   refreshTrigger?: number;
+  showGenerationProgress?: boolean;
 }
 
 const STATUS_CONFIG: Record<RepositoryStatus, {
@@ -116,11 +119,13 @@ function RepositoryCard({
   onVisibilityChange,
   onRetry,
   isRetrying,
+  showGenerationProgress,
 }: { 
   repo: RepositoryItemResponse;
   onVisibilityChange: (repoId: string, newIsPublic: boolean) => void;
   onRetry: (repo: RepositoryItemResponse) => void;
   isRetrying: boolean;
+  showGenerationProgress: boolean;
 }) {
   const t = useTranslations();
   const createdDate = new Date(repo.createdAt).toLocaleDateString();
@@ -164,6 +169,9 @@ function RepositoryCard({
             <p className="mt-2 text-xs text-muted-foreground">
               {t("home.repository.createdAt")}: {createdDate}
             </p>
+            {showGenerationProgress && (
+              <RepositoryGenerationProgress repo={repo} />
+            )}
           </div>
           <div className="flex flex-col items-end gap-2 shrink-0">
             <StatusBadge status={repo.statusName} />
@@ -208,6 +216,85 @@ function RepositoryCard({
   );
 }
 
+function getPercent(completed: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((completed / total) * 100)));
+}
+
+function RepositoryGenerationProgress({ repo }: { repo: RepositoryItemResponse }) {
+  const t = useTranslations();
+  const [progress, setProgress] = useState<ProcessingLogResponse | null>(null);
+
+  const loadProgress = useCallback(async () => {
+    try {
+      const response = await fetchProcessingLogs(repo.orgName, repo.repoName, undefined, 200);
+      setProgress(response);
+    } catch (error) {
+      console.debug("[WIKI][RepositoryList] Failed to fetch processing progress", {
+        repoId: repo.id,
+        orgName: repo.orgName,
+        repoName: repo.repoName,
+        error,
+      });
+    }
+  }, [repo.id, repo.orgName, repo.repoName]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadProgress();
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [loadProgress]);
+
+  useEffect(() => {
+    const shouldPoll = repo.statusName === "Pending" || repo.statusName === "Processing";
+    if (!shouldPoll) return;
+
+    const timer = setInterval(() => {
+      void loadProgress();
+    }, 10000);
+
+    return () => clearInterval(timer);
+  }, [loadProgress, repo.statusName]);
+
+  if (!progress) return null;
+
+  const generationTotal = progress.totalDocuments;
+  const generationCompleted = Math.min(progress.completedDocuments, generationTotal);
+  const generationPercent = getPercent(generationCompleted, generationTotal);
+
+  const translationTotal = progress.totalTranslationDocuments > 0
+    ? progress.totalTranslationDocuments
+    : generationTotal;
+  const translationCompleted = Math.min(progress.completedTranslationDocuments, translationTotal);
+  const translationPercent = getPercent(translationCompleted, translationTotal);
+
+  if (generationTotal <= 0 && translationTotal <= 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 space-y-3 rounded-md border bg-muted/20 p-3">
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-xs">
+          <span>{t("home.repository.status.documentProgress") || "Document Generation"}</span>
+          <span>{generationCompleted}/{generationTotal} ({generationPercent}%)</span>
+        </div>
+        <Progress value={generationPercent} className="h-2" />
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-xs">
+          <span>{t("home.repository.status.translationProgress") || "Translation Progress"}</span>
+          <span>{translationCompleted}/{translationTotal} ({translationPercent}%)</span>
+        </div>
+        <Progress value={translationPercent} className="h-2 [&_[data-slot=progress-indicator]]:bg-blue-500" />
+      </div>
+    </div>
+  );
+}
+
 function RepositoryListSkeleton() {
   return (
     <div className="space-y-4">
@@ -229,7 +316,7 @@ function RepositoryListSkeleton() {
   );
 }
 
-export function RepositoryList({ ownerId, refreshTrigger }: RepositoryListProps) {
+export function RepositoryList({ ownerId, refreshTrigger, showGenerationProgress = false }: RepositoryListProps) {
   const t = useTranslations();
   const [repositories, setRepositories] = useState<RepositoryItemResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -380,6 +467,7 @@ export function RepositoryList({ ownerId, refreshTrigger }: RepositoryListProps)
                 onVisibilityChange={handleVisibilityChange}
                 onRetry={handleRetry}
                 isRetrying={retryingRepoId === repo.id}
+                showGenerationProgress={showGenerationProgress}
               />
             ))}
           </div>

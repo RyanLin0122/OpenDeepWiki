@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using Anthropic.Models.Messages;
@@ -864,16 +865,18 @@ Please start executing the task.";
                 }
             }
 
-            throw new InvalidOperationException(
-                $"文档生成结果无效或为空，已重试{maxGenerationAttempts}次: {catalogPath}");
+            _logger.LogWarning(
+                "Document content generation skipped after {Attempts} attempts due to invalid or empty output. Path: {Path}, Title: {Title}",
+                maxGenerationAttempts, catalogPath, catalogTitle);
+            return;
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _logger.LogError(ex,
-                "Document content generation failed. Path: {Path}, Title: {Title}, Duration: {Duration}ms",
+            _logger.LogWarning(ex,
+                "Document content generation failed and will be skipped. Path: {Path}, Title: {Title}, Duration: {Duration}ms",
                 catalogPath, catalogTitle, stopwatch.ElapsedMilliseconds);
-            throw;
+            return;
         }
     }
 
@@ -987,7 +990,7 @@ Please start executing the task.";
                 {
                     ChatOptions = new ChatOptions()
                     {
-                        ToolMode = ChatToolMode.Auto,
+                        ToolMode = ResolveToolMode(operationName),
                         MaxOutputTokens = _options.MaxOutputTokens,
                         Tools = tools
                     }
@@ -1026,6 +1029,7 @@ Please start executing the task.";
                 var inputTokens = 0;
                 var outputTokens = 0;
                 var toolCallCount = 0;
+                var detectedToolCallKeys = new HashSet<string>(StringComparer.Ordinal);
 
                 _logger.LogDebug("Starting streaming response. Operation: {Operation}", operationName);
 
@@ -1053,6 +1057,14 @@ Please start executing the task.";
                         {
                             if (!string.IsNullOrEmpty(tool.FunctionName))
                             {
+                                var toolKey = !string.IsNullOrWhiteSpace(tool.ToolCallId)
+                                    ? tool.ToolCallId
+                                    : $"openai:{tool.FunctionName}:{tool.Index}";
+                                if (!detectedToolCallKeys.Add(toolKey))
+                                {
+                                    continue;
+                                }
+
                                 toolCallCount++;
                                 Console.WriteLine();
                                 Console.Write("Call Function:" + tool.FunctionName);
@@ -1069,6 +1081,27 @@ Please start executing the task.";
                                               Encoding.UTF8.GetString(tool.FunctionArgumentsUpdate.ToArray()));
                             }
                         }
+                    }
+
+                    // Fallback: some providers only expose tool_calls in raw delta payload;
+                    // parse raw JSON recursively to avoid false negatives in tool call counting.
+                    foreach (var (toolId, functionName) in ExtractToolCallsFromRawRepresentation(update.RawRepresentation))
+                    {
+                        var toolKey = !string.IsNullOrWhiteSpace(toolId)
+                            ? toolId
+                            : $"raw:{functionName}";
+
+                        if (!detectedToolCallKeys.Add(toolKey))
+                        {
+                            continue;
+                        }
+
+                        toolCallCount++;
+                        _logger.LogDebug(
+                            "Tool call #{CallNumber} detected from raw payload: {FunctionName}. Operation: {Operation}",
+                            toolCallCount,
+                            string.IsNullOrWhiteSpace(functionName) ? "unknown" : functionName,
+                            operationName);
                     }
 
                     // Track token usage if available
@@ -1193,6 +1226,14 @@ Please start executing the task.";
             "AI agent execution failed after all retry attempts. Operation: {Operation}, Model: {Model}, Attempts: {Attempts}",
             operationName, model, _options.MaxRetryAttempts);
 
+        if (lastException is ToolCallNotExecutedException)
+        {
+            _logger.LogWarning(
+                "AI agent exhausted retries without tool calls; continuing workflow. Operation: {Operation}, Model: {Model}",
+                operationName, model);
+            return;
+        }
+
         throw new InvalidOperationException(
             $"AI agent execution failed after {_options.MaxRetryAttempts} attempts for operation '{operationName}'",
             lastException);
@@ -1231,6 +1272,111 @@ Please start executing the task.";
     {
         return operationName.StartsWith("DocumentContent:", StringComparison.OrdinalIgnoreCase)
                || operationName.StartsWith("CatalogGeneration", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ChatToolMode ResolveToolMode(string operationName)
+    {
+        if (!RequiresToolExecution(operationName))
+        {
+            return ChatToolMode.Auto;
+        }
+
+        // Prefer strict tool mode for document/catalog generation tasks.
+        // ChatToolMode may be represented as enum-like static members (not necessarily enum type)
+        // across different SDK/provider versions.
+        return TryGetChatToolMode("Required")
+               ?? TryGetChatToolMode("RequireAny")
+               ?? TryGetChatToolMode("Any")
+               ?? ChatToolMode.Auto;
+    }
+
+    private static ChatToolMode? TryGetChatToolMode(string memberName)
+    {
+        var modeType = typeof(ChatToolMode);
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static | BindingFlags.IgnoreCase;
+
+        var property = modeType.GetProperty(memberName, flags);
+        if (property?.PropertyType == modeType && property.GetValue(null) is ChatToolMode propertyValue)
+        {
+            return propertyValue;
+        }
+
+        var field = modeType.GetField(memberName, flags);
+        if (field?.FieldType == modeType && field.GetValue(null) is ChatToolMode fieldValue)
+        {
+            return fieldValue;
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<(string ToolId, string FunctionName)> ExtractToolCallsFromRawRepresentation(object? rawRepresentation)
+    {
+        if (rawRepresentation == null)
+        {
+            return Array.Empty<(string ToolId, string FunctionName)>();
+        }
+
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(rawRepresentation);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var toolCalls = new List<(string ToolId, string FunctionName)>();
+            CollectToolCallsFromJson(doc.RootElement, toolCalls);
+            return toolCalls;
+        }
+        catch
+        {
+            return Array.Empty<(string ToolId, string FunctionName)>();
+        }
+    }
+
+    private static void CollectToolCallsFromJson(
+        System.Text.Json.JsonElement element,
+        List<(string ToolId, string FunctionName)> toolCalls)
+    {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("tool_calls", out var toolCallsElement) &&
+                toolCallsElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in toolCallsElement.EnumerateArray())
+                {
+                    var toolId = item.TryGetProperty("id", out var idElement) &&
+                                 idElement.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? idElement.GetString() ?? string.Empty
+                        : string.Empty;
+
+                    var functionName = string.Empty;
+                    if (item.TryGetProperty("function", out var functionElement) &&
+                        functionElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                        functionElement.TryGetProperty("name", out var nameElement) &&
+                        nameElement.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        functionName = nameElement.GetString() ?? string.Empty;
+                    }
+
+                    toolCalls.Add((toolId, functionName));
+                }
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                CollectToolCallsFromJson(property.Value, toolCalls);
+            }
+
+            return;
+        }
+
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var item in element.EnumerateArray())
+        {
+            CollectToolCallsFromJson(item, toolCalls);
+        }
     }
 
     private sealed class ToolCallNotExecutedException(string message) : Exception(message);

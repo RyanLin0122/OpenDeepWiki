@@ -85,6 +85,7 @@ public class ProcessingLogService : IProcessingLogService
 
         // 解析文档生成进度
         var (totalDocuments, completedDocuments) = ParseDocumentProgress(logs);
+        var (totalTranslationDocuments, completedTranslationDocuments) = ParseTranslationProgress(logs);
 
         // 获取开始时间（第一条日志的时间）
         var startedAt = logs.FirstOrDefault()?.CreatedAt;
@@ -95,6 +96,8 @@ public class ProcessingLogService : IProcessingLogService
             Logs = logs,
             TotalDocuments = totalDocuments,
             CompletedDocuments = completedDocuments,
+            TotalTranslationDocuments = totalTranslationDocuments,
+            CompletedTranslationDocuments = completedTranslationDocuments,
             StartedAt = startedAt
         };
     }
@@ -151,6 +154,63 @@ public class ProcessingLogService : IProcessingLogService
             {
                 completed = total;
             }
+        }
+
+        return (total, completed);
+    }
+
+    /// <summary>
+    /// 从日志中解析文档翻译进度
+    /// </summary>
+    private static (int total, int completed) ParseTranslationProgress(List<ProcessingLogItem> logs)
+    {
+        int total = 0;
+        int completed = 0;
+
+        foreach (var log in logs)
+        {
+            if (log.Step != ProcessingStep.Translation || log.IsAiOutput || !string.IsNullOrEmpty(log.ToolName))
+            {
+                continue;
+            }
+
+            // 匹配 "发现 X 个文档需要翻译" 格式
+            var totalMatch = System.Text.RegularExpressions.Regex.Match(
+                log.Message, @"发现\s*(\d+)\s*个文档需要翻译");
+            if (totalMatch.Success)
+            {
+                total = int.Parse(totalMatch.Groups[1].Value);
+                continue;
+            }
+
+            // 匹配 "正在翻译文档 (X/Y)" - 用于实时进度（按已开始任务估算）
+            var progressMatch = System.Text.RegularExpressions.Regex.Match(
+                log.Message, @"正在翻译文档\s*\((\d+)/(\d+)\)");
+            if (progressMatch.Success)
+            {
+                completed = Math.Max(completed, int.Parse(progressMatch.Groups[1].Value));
+                if (total == 0)
+                {
+                    total = int.Parse(progressMatch.Groups[2].Value);
+                }
+                continue;
+            }
+
+            // 匹配 "翻译完成 -> xx，成功: A，失败: B" 格式
+            var summaryMatch = System.Text.RegularExpressions.Regex.Match(
+                log.Message, @"翻译完成\s*->.*成功:\s*(\d+)\s*，\s*失败:\s*(\d+)");
+            if (summaryMatch.Success)
+            {
+                var success = int.Parse(summaryMatch.Groups[1].Value);
+                var failed = int.Parse(summaryMatch.Groups[2].Value);
+                completed = Math.Max(completed, success + failed);
+                continue;
+            }
+        }
+
+        if (total > 0 && completed > total)
+        {
+            completed = total;
         }
 
         return (total, completed);

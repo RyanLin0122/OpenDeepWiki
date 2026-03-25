@@ -165,6 +165,7 @@
       "entries": "条记录",
       "items": "项",
       "documentProgress": "文档生成进度",
+      "translationProgress": "文档翻译进度",
       "remaining": "剩余",
       "errorLogs": "错误日志",
       "failedTip": "Wiki 生成遇到错误。这可能是由于仓库大小、访问权限问题或临时服务问题导致的。",

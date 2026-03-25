@@ -71,7 +71,7 @@ export default function PrivatePage() {
           </div>
         </div>
 
-        <RepositoryList ownerId={ownerUserId} refreshTrigger={refreshTrigger} />
+        <RepositoryList ownerId={ownerUserId} refreshTrigger={refreshTrigger} showGenerationProgress />
       </div>
     </AppLayout>
   );

@@ -165,6 +165,7 @@
       "entries": "entries",
       "items": "items",
       "documentProgress": "Document Progress",
+      "translationProgress": "Translation Progress",
       "remaining": "Remaining",
       "errorLogs": "Error Logs",
       "failedTip": "The wiki generation encountered an error. This could be due to repository size, access issues, or temporary service problems.",
