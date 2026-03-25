@@ -727,20 +727,40 @@ Please start executing the task.";
 
 Please start executing the task.";
 
-            await ExecuteAgentWithRetryAsync(
-                _options.ContentModel,
-                _options.GetContentRequestOptions(),
-                prompt,
-                userMessage,
-                tools,
-                $"DocumentContent:{catalogPath}",
-                ProcessingStep.Content,
-                cancellationToken);
+            const int maxGenerationAttempts = 5;
+            for (var attempt = 1; attempt <= maxGenerationAttempts; attempt++)
+            {
+                await ExecuteAgentWithRetryAsync(
+                    _options.ContentModel,
+                    _options.GetContentRequestOptions(),
+                    prompt,
+                    userMessage,
+                    tools,
+                    $"DocumentContent:{catalogPath}:attempt{attempt}",
+                    ProcessingStep.Content,
+                    cancellationToken);
 
-            stopwatch.Stop();
-            _logger.LogInformation(
-                "Document content generation completed. Path: {Path}, Title: {Title}, Duration: {Duration}ms",
-                catalogPath, catalogTitle, stopwatch.ElapsedMilliseconds);
+                if (await HasValidGeneratedDocumentAsync(context, branchLanguage.Id, catalogPath, cancellationToken))
+                {
+                    stopwatch.Stop();
+                    _logger.LogInformation(
+                        "Document content generation completed. Path: {Path}, Title: {Title}, Attempt: {Attempt}/{MaxAttempts}, Duration: {Duration}ms",
+                        catalogPath, catalogTitle, attempt, maxGenerationAttempts, stopwatch.ElapsedMilliseconds);
+                    return;
+                }
+
+                _logger.LogWarning(
+                    "Generated document invalid or empty, will retry. Path: {Path}, Title: {Title}, Attempt: {Attempt}/{MaxAttempts}",
+                    catalogPath, catalogTitle, attempt, maxGenerationAttempts);
+
+                if (attempt < maxGenerationAttempts)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"文档生成结果无效或为空，已重试{maxGenerationAttempts}次: {catalogPath}");
         }
         catch (Exception ex)
         {
@@ -750,6 +770,32 @@ Please start executing the task.";
                 catalogPath, catalogTitle, stopwatch.ElapsedMilliseconds);
             throw;
         }
+    }
+
+    private static async Task<bool> HasValidGeneratedDocumentAsync(
+        IContext context,
+        string branchLanguageId,
+        string catalogPath,
+        CancellationToken cancellationToken)
+    {
+        var catalog = await context.DocCatalogs
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                c => c.BranchLanguageId == branchLanguageId &&
+                     c.Path == catalogPath &&
+                     !c.IsDeleted,
+                cancellationToken);
+
+        if (catalog?.DocFileId is null)
+        {
+            return false;
+        }
+
+        var docFile = await context.DocFiles
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == catalog.DocFileId && !d.IsDeleted, cancellationToken);
+
+        return !string.IsNullOrWhiteSpace(docFile?.Content);
     }
 
 
