@@ -131,7 +131,7 @@ public class RepositoryDocsService(IContext context, IGitPlatformService gitPlat
             };
         }
 
-        // 仓库处理失败
+        // 仓库处理失败（部分失败仍允许继续查看已生成文档）
         if (repository.Status == RepositoryStatus.Failed)
         {
             return new RepositoryTreeResponse
@@ -146,7 +146,30 @@ public class RepositoryDocsService(IContext context, IGitPlatformService gitPlat
 
         // 仓库处理完成，获取文档目录
         var branchEntity = await GetBranchAsync(repository.Id, branch);
+        if (branchEntity is null)
+        {
+            return new RepositoryTreeResponse
+            {
+                Owner = repository.OrgName,
+                Repo = repository.RepoName,
+                Exists = true,
+                Status = repository.Status,
+                Nodes = []
+            };
+        }
+
         var language = await GetLanguageAsync(branchEntity.Id, lang);
+        if (language is null)
+        {
+            return new RepositoryTreeResponse
+            {
+                Owner = repository.OrgName,
+                Repo = repository.RepoName,
+                Exists = true,
+                Status = repository.Status,
+                Nodes = []
+            };
+        }
 
         var catalogs = await context.DocCatalogs
             .AsNoTracking()

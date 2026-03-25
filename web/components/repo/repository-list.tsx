@@ -23,6 +23,7 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
   ExternalLink,
   RefreshCw,
   GitBranch,
@@ -56,6 +57,21 @@ const STATUS_CONFIG: Record<RepositoryStatus, {
     icon: CheckCircle2,
     className: "text-green-500 bg-green-500/10",
     labelKey: "completed",
+  },
+  CompletedNoDocs: {
+    icon: AlertTriangle,
+    className: "text-amber-500 bg-amber-500/10",
+    labelKey: "completedNoDocs",
+  },
+  Empty: {
+    icon: AlertTriangle,
+    className: "text-slate-500 bg-slate-500/10",
+    labelKey: "empty",
+  },
+  PartialFailed: {
+    icon: AlertTriangle,
+    className: "text-orange-500 bg-orange-500/10",
+    labelKey: "partialFailed",
   },
   Failed: {
     icon: XCircle,
@@ -112,6 +128,15 @@ function RepositoryCard({
   // 生成正确编码的Wiki导航URL
   // 使用encodeURIComponent处理特殊字符，确保URL安全
   const wikiUrl = buildRepoBasePath(repo.orgName, repo.repoName);
+  const handleViewWikiClick = () => {
+    console.debug("[WIKI][RepositoryList] View Wiki clicked", {
+      repositoryId: repo.id,
+      orgName: repo.orgName,
+      repoName: repo.repoName,
+      statusName: repo.statusName,
+      wikiUrl,
+    });
+  };
 
   const handleVisibilityChange = (newIsPublic: boolean) => {
     onVisibilityChange(repo.id, newIsPublic);
@@ -148,9 +173,9 @@ function RepositoryCard({
               hasPassword={repo.hasPassword}
               onVisibilityChange={handleVisibilityChange}
             />
-            {repo.statusName === "Completed" && (
+            {repo.statusName === "Completed" && repo.hasDocs && (
               <Button variant="outline" size="sm" asChild>
-                <Link href={wikiUrl}>
+                <Link href={wikiUrl} onClick={handleViewWikiClick}>
                   <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
                   {t("home.repository.viewWiki")}
                 </Link>
@@ -212,7 +237,13 @@ export function RepositoryList({ ownerId, refreshTrigger }: RepositoryListProps)
     try {
       setIsLoading(true);
       setError(null);
+      console.debug("[WIKI][RepositoryList] Loading repository list", { ownerId });
       const response = await fetchRepositoryList({ ownerId });
+      console.debug("[WIKI][RepositoryList] Repository list loaded", {
+        ownerId,
+        total: response.total,
+        itemCount: response.items.length,
+      });
       setRepositories(response.items);
     } catch (err) {
       setError("Failed to load repositories");

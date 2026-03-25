@@ -20,13 +20,25 @@ interface RepoDocPageProps {
 
 async function getDocData(owner: string, repo: string, slug: string, branch?: string, lang?: string) {
   try {
+    console.debug("[WIKI][RepoDocPage] Fetching doc", { owner, repo, slug, branch, lang });
     const doc = await fetchRepoDoc(owner, repo, slug, branch, lang);
     if (!doc.exists) {
+      console.warn("[WIKI][RepoDocPage] Doc not exists", { owner, repo, slug, branch, lang });
       return null;
     }
     const headings = extractHeadings(doc.content, 3);
+    console.debug("[WIKI][RepoDocPage] Doc fetched", {
+      owner,
+      repo,
+      slug,
+      branch,
+      lang,
+      headingCount: headings.length,
+      sourceFileCount: doc.sourceFiles?.length ?? 0,
+    });
     return { doc, headings };
-  } catch {
+  } catch (error) {
+    console.error("[WIKI][RepoDocPage] Failed to fetch doc", { owner, repo, slug, branch, lang, error });
     return null;
   }
 }
@@ -39,11 +51,21 @@ export default async function RepoDocPage({ params, searchParams }: RepoDocPageP
   const branch = resolvedSearchParams?.branch;
   const lang = resolvedSearchParams?.lang;
   const slug = slugParts.join("/");
+  console.debug("[WIKI][RepoDocPage] Route resolved", {
+    owner,
+    repo,
+    slug,
+    decodedOwner,
+    decodedRepo,
+    branch,
+    lang,
+  });
 
   const data = await getDocData(decodedOwner, decodedRepo, slug, branch, lang);
   
   // 文档不存在，但保留侧边栏（由layout提供）
   if (!data) {
+    console.warn("[WIKI][RepoDocPage] Rendering DocNotFound", { decodedOwner, decodedRepo, slug, branch, lang });
     return (
       <div className="mx-auto max-w-4xl">
         <DocNotFound slug={slug} />

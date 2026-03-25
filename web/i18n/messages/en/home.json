@@ -145,6 +145,9 @@
       "pending": "Pending",
       "processing": "Processing",
       "completed": "Completed",
+      "completedNoDocs": "Completed (No Docs)",
+      "empty": "Empty Repository",
+      "partialFailed": "Partially Failed",
       "failed": "Failed",
       "pendingDescription": "Repository submitted, waiting in the processing queue...",
       "processingDescription": "AI is analyzing the repository and generating Wiki documentation, please wait...",
@@ -165,6 +168,7 @@
       "remaining": "Remaining",
       "errorLogs": "Error Logs",
       "failedTip": "The wiki generation encountered an error. This could be due to repository size, access issues, or temporary service problems.",
+      "completedNoDocsTip": "Processing is complete, but no documentation is available yet.",
       "completedTip": "Redirecting to documentation...",
       "steps": {
         "workspace": "Prepare",
