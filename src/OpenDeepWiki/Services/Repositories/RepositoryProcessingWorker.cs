@@ -478,7 +478,12 @@ public class RepositoryProcessingWorker(
                 await wikiGenerator.GenerateCatalogAsync(workspace, language, stoppingToken);
                 
                 logger.LogInformation("Generating documents for {LanguageCode}", language.LanguageCode);
-                await wikiGenerator.GenerateDocumentsAsync(workspace, language, stoppingToken);
+                var summary = await wikiGenerator.GenerateDocumentsAsync(workspace, language, stoppingToken);
+                if (summary.FailedCount > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"文档生成存在失败项: 失败 {summary.FailedCount}/{summary.TotalCount}");
+                }
             }
 
             languageStopwatch.Stop();

@@ -291,7 +291,7 @@ Execute the workflow now. Read entry point files to understand the architecture,
 
 
     /// <inheritdoc />
-    public async Task GenerateDocumentsAsync(
+    public async Task<DocumentGenerationSummary> GenerateDocumentsAsync(
         RepositoryWorkspace workspace,
         BranchLanguage branchLanguage,
         CancellationToken cancellationToken = default)
@@ -431,6 +431,13 @@ Execute the workflow now. Read entry point files to understand the architecture,
             successCount, failCount, stopwatch.ElapsedMilliseconds);
 
         await LogProcessingAsync(ProcessingStep.Content, $"文档生成完成，成功: {successCount}，失败: {failCount}，耗时: {stopwatch.ElapsedMilliseconds}ms", cancellationToken);
+
+        return new DocumentGenerationSummary
+        {
+            TotalCount = catalogItems.Count,
+            SuccessCount = successCount,
+            FailedCount = failCount
+        };
     }
 
     /// <inheritdoc />

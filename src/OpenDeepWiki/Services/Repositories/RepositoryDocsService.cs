@@ -196,7 +196,11 @@ public class RepositoryDocsService(IContext context, IGitPlatformService gitPlat
 
         foreach (var catalog in catalogs.Where(c => c.ParentId == null))
         {
-            rootNodes.Add(BuildTreeNode(catalog, catalogMap));
+            var node = BuildTreeNode(catalog, catalogMap);
+            if (node is not null)
+            {
+                rootNodes.Add(node);
+            }
         }
 
         // 递归查找第一个有实际内容的文档
@@ -419,12 +423,49 @@ public class RepositoryDocsService(IContext context, IGitPlatformService gitPlat
         return null;
     }
 
-    private static RepositoryTreeNodeResponse BuildTreeNode(DocCatalog catalog, Dictionary<string, DocCatalog> catalogMap)
+    /// <summary>
+    /// 从指定目录节点向下查找第一个有内容的文档路径
+    /// </summary>
+    private static string? FindFirstContentSlug(Dictionary<string, DocCatalog> catalogMap, string parentId)
     {
+        var children = catalogMap.Values
+            .Where(c => c.ParentId == parentId)
+            .OrderBy(c => c.Order)
+            .ToList();
+
+        foreach (var child in children)
+        {
+            if (!string.IsNullOrEmpty(child.DocFileId))
+            {
+                return NormalizePath(child.Path);
+            }
+
+            var childSlug = FindFirstContentSlug(catalogMap, child.Id);
+            if (!string.IsNullOrEmpty(childSlug))
+            {
+                return childSlug;
+            }
+        }
+
+        return null;
+    }
+
+    private static RepositoryTreeNodeResponse? BuildTreeNode(DocCatalog catalog, Dictionary<string, DocCatalog> catalogMap)
+    {
+        var hasContent = !string.IsNullOrEmpty(catalog.DocFileId);
+        var targetSlug = hasContent ? NormalizePath(catalog.Path) : FindFirstContentSlug(catalogMap, catalog.Id);
+
+        if (string.IsNullOrEmpty(targetSlug))
+        {
+            return null;
+        }
+
         var node = new RepositoryTreeNodeResponse
         {
             Title = catalog.Title,
             Slug = NormalizePath(catalog.Path),
+            HasContent = hasContent,
+            TargetSlug = targetSlug,
             Children = []
         };
 
@@ -434,7 +475,11 @@ public class RepositoryDocsService(IContext context, IGitPlatformService gitPlat
 
         foreach (var child in children)
         {
-            node.Children.Add(BuildTreeNode(child, catalogMap));
+            var childNode = BuildTreeNode(child, catalogMap);
+            if (childNode is not null)
+            {
+                node.Children.Add(childNode);
+            }
         }
 
         return node;

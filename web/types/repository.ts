@@ -1,6 +1,8 @@
 export interface RepoTreeNode {
   title: string;
   slug: string;
+  hasContent: boolean;
+  targetSlug?: string;
   children: RepoTreeNode[];
 }
 

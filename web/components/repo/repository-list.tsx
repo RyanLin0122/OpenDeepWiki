@@ -181,7 +181,10 @@ function RepositoryCard({
                 </Link>
               </Button>
             )}
-            {repo.statusName === "Failed" && (
+            {(repo.statusName === "Failed" ||
+              repo.statusName === "PartialFailed" ||
+              repo.statusName === "CompletedNoDocs" ||
+              repo.statusName === "Empty") && (
               <Button
                 variant="outline"
                 size="sm"

@@ -618,8 +618,8 @@ export function RepositoryProcessingStatus({
           </div>
         )}
 
-        {/* 失败状态 */}
-        {status === "Failed" && (
+        {/* 失败/部分失败状态 */}
+        {(status === "Failed" || status === "PartialFailed") && (
           <div className="space-y-4">
             {logs.length > 0 && (
               <div className="bg-background/80 rounded-lg border border-red-500/20 overflow-hidden">
@@ -669,6 +669,22 @@ export function RepositoryProcessingStatus({
                 ? (t("home.repository.status.completedTip") || "Redirecting to documentation...")
                 : (t("home.repository.status.completedNoDocsTip") || "Completed, but no documents are available yet.")}
             </div>
+            {(status === "CompletedNoDocs" || status === "Empty") && (
+              <button
+                onClick={handleRetry}
+                disabled={isRegenerating}
+                className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isRegenerating ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                {isRegenerating
+                  ? (t("home.repository.status.regenerating") || "Regenerating...")
+                  : t("home.repository.status.retry")}
+              </button>
+            )}
           </div>
         )}
       </div>

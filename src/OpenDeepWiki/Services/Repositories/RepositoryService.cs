@@ -478,8 +478,8 @@ public class RepositoryService(
             }
         }
 
-        // 只有失败或完成状态才能重新生成
-        if (repository.Status != RepositoryStatus.Failed && repository.Status != RepositoryStatus.Completed)
+        // 只有终态才允许重新生成
+        if (repository.Status == RepositoryStatus.Pending || repository.Status == RepositoryStatus.Processing)
         {
             return new RegenerateResponse
             {
