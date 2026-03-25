@@ -79,6 +79,11 @@ public class RepositoryItemResponse
     public bool HasPassword { get; set; }
 
     /// <summary>
+    /// 是否已有可用文档
+    /// </summary>
+    public bool HasDocs { get; set; }
+
+    /// <summary>
     /// 创建时间
     /// </summary>
     public DateTime CreatedAt { get; set; }

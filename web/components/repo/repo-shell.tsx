@@ -54,24 +54,29 @@ function SidebarTree({
   return (
     <ul className={depth === 0 ? "space-y-1" : "mt-1 space-y-1 border-l border-border/60 pl-3"}>
       {nodes.map((node) => {
+        const navigableSlug = node.targetSlug || node.slug;
         const href = queryString
-          ? `${buildRepoDocPath(owner, repo, node.slug)}?${queryString}`
-          : buildRepoDocPath(owner, repo, node.slug);
-        const isActive = currentPath === node.slug;
+          ? `${buildRepoDocPath(owner, repo, navigableSlug)}?${queryString}`
+          : buildRepoDocPath(owner, repo, navigableSlug);
+        const isActive = currentPath === node.slug || currentPath === navigableSlug;
 
         return (
           <li key={node.slug}>
-            <Link
-              href={href}
-              className={[
-                "block rounded-md px-3 py-2 text-sm transition-colors",
-                isActive
-                  ? "bg-primary text-primary-foreground"
-                  : "text-foreground/80 hover:bg-muted hover:text-foreground",
-              ].join(" ")}
-            >
-              {node.title}
-            </Link>
+            {node.hasContent || node.targetSlug ? (
+              <Link
+                href={href}
+                className={[
+                  "block rounded-md px-3 py-2 text-sm transition-colors",
+                  isActive
+                    ? "bg-primary text-primary-foreground"
+                    : "text-foreground/80 hover:bg-muted hover:text-foreground",
+                ].join(" ")}
+              >
+                {node.title}
+              </Link>
+            ) : (
+              <span className="block rounded-md px-3 py-2 text-sm text-foreground/50">{node.title}</span>
+            )}
             {node.children && node.children.length > 0 && (
               <SidebarTree
                 nodes={node.children}
