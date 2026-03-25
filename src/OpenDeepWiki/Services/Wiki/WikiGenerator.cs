@@ -219,11 +219,12 @@ Remember to call WriteMindMapAsync with the complete mind map content.";
         // 记录开始生成目录
         await LogProcessingAsync(ProcessingStep.Catalog, $"开始生成目录结构 ({branchLanguage.LanguageCode})", cancellationToken);
 
+        RepositoryContext? repoContext = null;
         try
         {
             // 收集仓库上下文（目录结构、项目类型、README等）
             _logger.LogDebug("Pre-collecting repository context");
-            var repoContext = await CollectRepositoryContextAsync(workspace.WorkingDirectory, cancellationToken);
+            repoContext = await CollectRepositoryContextAsync(workspace.WorkingDirectory, cancellationToken);
             _logger.LogDebug("Repository context collected. ProjectType: {ProjectType}, EntryPoints: {EntryPoints}", 
                 repoContext.ProjectType, string.Join(", ", repoContext.EntryPoints));
 
@@ -281,12 +282,116 @@ Execute the workflow now. Read entry point files to understand the architecture,
         }
         catch (Exception ex)
         {
+            if (repoContext != null && IsToolCallMissingFailure(ex))
+            {
+                _logger.LogWarning(ex,
+                    "Catalog generation returned without tool calls, switching to fallback catalog. Repository: {Org}/{Repo}, Language: {Language}",
+                    workspace.Organization, workspace.RepositoryName, branchLanguage.LanguageCode);
+
+                var catalogStorage = new CatalogStorage(_context, branchLanguage.Id);
+                var fallbackCatalogJson = BuildFallbackCatalogJson(workspace.RepositoryName, repoContext);
+                await catalogStorage.SetCatalogAsync(fallbackCatalogJson, cancellationToken);
+
+                await LogProcessingAsync(ProcessingStep.Catalog,
+                    "AI 未执行工具调用，已使用回退目录模板生成 Catalog。", cancellationToken);
+
+                stopwatch.Stop();
+                _logger.LogInformation(
+                    "Catalog fallback generation completed. Repository: {Org}/{Repo}, Language: {Language}, Duration: {Duration}ms",
+                    workspace.Organization, workspace.RepositoryName, branchLanguage.LanguageCode, stopwatch.ElapsedMilliseconds);
+                return;
+            }
+
             stopwatch.Stop();
             _logger.LogError(ex,
                 "Catalog generation failed. Repository: {Org}/{Repo}, Language: {Language}, Duration: {Duration}ms",
                 workspace.Organization, workspace.RepositoryName, branchLanguage.LanguageCode, stopwatch.ElapsedMilliseconds);
             throw;
         }
+    }
+
+    private static bool IsToolCallMissingFailure(Exception ex)
+    {
+        if (ex is ToolCallNotExecutedException)
+        {
+            return true;
+        }
+
+        return ex is InvalidOperationException
+        {
+            InnerException: ToolCallNotExecutedException
+        };
+    }
+
+    private static string BuildFallbackCatalogJson(string repositoryName, RepositoryContext context)
+    {
+        var root = new CatalogRoot
+        {
+            Items =
+            [
+                new CatalogItem
+                {
+                    Title = "Overview",
+                    Path = "overview",
+                    Order = 0
+                }
+            ]
+        };
+
+        var candidates = context.EntryPoints
+            .Concat(context.KeyFiles)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            var title = Path.GetFileName(candidate);
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                title = candidate;
+            }
+
+            root.Items.Add(new CatalogItem
+            {
+                Title = title,
+                Path = $"source-{SanitizeSlug(candidate)}",
+                Order = i + 1
+            });
+        }
+
+        if (root.Items.Count == 1)
+        {
+            root.Items.Add(new CatalogItem
+            {
+                Title = repositoryName,
+                Path = "repository-details",
+                Order = 1
+            });
+        }
+
+        return System.Text.Json.JsonSerializer.Serialize(root, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+        });
+    }
+
+    private static string SanitizeSlug(string value)
+    {
+        var chars = value
+            .ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-')
+            .ToArray();
+
+        var sanitized = new string(chars);
+        while (sanitized.Contains("--", StringComparison.Ordinal))
+        {
+            sanitized = sanitized.Replace("--", "-", StringComparison.Ordinal);
+        }
+
+        return sanitized.Trim('-');
     }
 
 
