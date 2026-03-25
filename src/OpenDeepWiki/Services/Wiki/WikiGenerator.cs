@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using Anthropic.Models.Messages;
@@ -1251,23 +1252,32 @@ Please start executing the task.";
         }
 
         // Prefer strict tool mode for document/catalog generation tasks.
-        // Different SDK/provider versions may expose this enum value with different names.
-        if (Enum.TryParse<ChatToolMode>("Required", true, out var requiredMode))
+        // ChatToolMode may be represented as enum-like static members (not necessarily enum type)
+        // across different SDK/provider versions.
+        return TryGetChatToolMode("Required")
+               ?? TryGetChatToolMode("RequireAny")
+               ?? TryGetChatToolMode("Any")
+               ?? ChatToolMode.Auto;
+    }
+
+    private static ChatToolMode? TryGetChatToolMode(string memberName)
+    {
+        var modeType = typeof(ChatToolMode);
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static | BindingFlags.IgnoreCase;
+
+        var property = modeType.GetProperty(memberName, flags);
+        if (property?.PropertyType == modeType && property.GetValue(null) is ChatToolMode propertyValue)
         {
-            return requiredMode;
+            return propertyValue;
         }
 
-        if (Enum.TryParse<ChatToolMode>("RequireAny", true, out var requireAnyMode))
+        var field = modeType.GetField(memberName, flags);
+        if (field?.FieldType == modeType && field.GetValue(null) is ChatToolMode fieldValue)
         {
-            return requireAnyMode;
+            return fieldValue;
         }
 
-        if (Enum.TryParse<ChatToolMode>("Any", true, out var anyMode))
-        {
-            return anyMode;
-        }
-
-        return ChatToolMode.Auto;
+        return null;
     }
 
     private sealed class ToolCallNotExecutedException(string message) : Exception(message);
