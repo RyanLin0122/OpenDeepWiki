@@ -150,6 +150,7 @@
       "entries": "件",
       "items": "項目",
       "documentProgress": "ドキュメント生成進捗",
+      "translationProgress": "ドキュメント翻訳進捗",
       "remaining": "残り",
       "errorLogs": "エラーログ",
       "failedTip": "Wiki生成中にエラーが発生しました。リポジトリのサイズ、アクセス権限、または一時的なサービスの問題が原因の可能性があります。",
