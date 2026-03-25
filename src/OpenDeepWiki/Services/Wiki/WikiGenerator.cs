@@ -219,11 +219,12 @@ Remember to call WriteMindMapAsync with the complete mind map content.";
         // 记录开始生成目录
         await LogProcessingAsync(ProcessingStep.Catalog, $"开始生成目录结构 ({branchLanguage.LanguageCode})", cancellationToken);
 
+        RepositoryContext? repoContext = null;
         try
         {
             // 收集仓库上下文（目录结构、项目类型、README等）
             _logger.LogDebug("Pre-collecting repository context");
-            var repoContext = await CollectRepositoryContextAsync(workspace.WorkingDirectory, cancellationToken);
+            repoContext = await CollectRepositoryContextAsync(workspace.WorkingDirectory, cancellationToken);
             _logger.LogDebug("Repository context collected. ProjectType: {ProjectType}, EntryPoints: {EntryPoints}", 
                 repoContext.ProjectType, string.Join(", ", repoContext.EntryPoints));
 
@@ -281,6 +282,26 @@ Execute the workflow now. Read entry point files to understand the architecture,
         }
         catch (Exception ex)
         {
+            if (repoContext != null && IsToolCallMissingFailure(ex))
+            {
+                _logger.LogWarning(ex,
+                    "Catalog generation returned without tool calls, switching to fallback catalog. Repository: {Org}/{Repo}, Language: {Language}",
+                    workspace.Organization, workspace.RepositoryName, branchLanguage.LanguageCode);
+
+                var catalogStorage = new CatalogStorage(_context, branchLanguage.Id);
+                var fallbackCatalogJson = BuildFallbackCatalogJson(workspace.RepositoryName, repoContext);
+                await catalogStorage.SetCatalogAsync(fallbackCatalogJson, cancellationToken);
+
+                await LogProcessingAsync(ProcessingStep.Catalog,
+                    "AI 未执行工具调用，已使用回退目录模板生成 Catalog。", cancellationToken);
+
+                stopwatch.Stop();
+                _logger.LogInformation(
+                    "Catalog fallback generation completed. Repository: {Org}/{Repo}, Language: {Language}, Duration: {Duration}ms",
+                    workspace.Organization, workspace.RepositoryName, branchLanguage.LanguageCode, stopwatch.ElapsedMilliseconds);
+                return;
+            }
+
             stopwatch.Stop();
             _logger.LogError(ex,
                 "Catalog generation failed. Repository: {Org}/{Repo}, Language: {Language}, Duration: {Duration}ms",
@@ -289,9 +310,93 @@ Execute the workflow now. Read entry point files to understand the architecture,
         }
     }
 
+    private static bool IsToolCallMissingFailure(Exception ex)
+    {
+        if (ex is ToolCallNotExecutedException)
+        {
+            return true;
+        }
+
+        return ex is InvalidOperationException
+        {
+            InnerException: ToolCallNotExecutedException
+        };
+    }
+
+    private static string BuildFallbackCatalogJson(string repositoryName, RepositoryContext context)
+    {
+        var root = new CatalogRoot
+        {
+            Items =
+            [
+                new CatalogItem
+                {
+                    Title = "Overview",
+                    Path = "overview",
+                    Order = 0
+                }
+            ]
+        };
+
+        var candidates = context.EntryPoints
+            .Concat(context.KeyFiles)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            var title = Path.GetFileName(candidate);
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                title = candidate;
+            }
+
+            root.Items.Add(new CatalogItem
+            {
+                Title = title,
+                Path = $"source-{SanitizeSlug(candidate)}",
+                Order = i + 1
+            });
+        }
+
+        if (root.Items.Count == 1)
+        {
+            root.Items.Add(new CatalogItem
+            {
+                Title = repositoryName,
+                Path = "repository-details",
+                Order = 1
+            });
+        }
+
+        return System.Text.Json.JsonSerializer.Serialize(root, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+        });
+    }
+
+    private static string SanitizeSlug(string value)
+    {
+        var chars = value
+            .ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-')
+            .ToArray();
+
+        var sanitized = new string(chars);
+        while (sanitized.Contains("--", StringComparison.Ordinal))
+        {
+            sanitized = sanitized.Replace("--", "-", StringComparison.Ordinal);
+        }
+
+        return sanitized.Trim('-');
+    }
+
 
     /// <inheritdoc />
-    public async Task GenerateDocumentsAsync(
+    public async Task<DocumentGenerationSummary> GenerateDocumentsAsync(
         RepositoryWorkspace workspace,
         BranchLanguage branchLanguage,
         CancellationToken cancellationToken = default)
@@ -431,6 +536,13 @@ Execute the workflow now. Read entry point files to understand the architecture,
             successCount, failCount, stopwatch.ElapsedMilliseconds);
 
         await LogProcessingAsync(ProcessingStep.Content, $"文档生成完成，成功: {successCount}，失败: {failCount}，耗时: {stopwatch.ElapsedMilliseconds}ms", cancellationToken);
+
+        return new DocumentGenerationSummary
+        {
+            TotalCount = catalogItems.Count,
+            SuccessCount = successCount,
+            FailedCount = failCount
+        };
     }
 
     /// <inheritdoc />
@@ -720,20 +832,40 @@ Please start executing the task.";
 
 Please start executing the task.";
 
-            await ExecuteAgentWithRetryAsync(
-                _options.ContentModel,
-                _options.GetContentRequestOptions(),
-                prompt,
-                userMessage,
-                tools,
-                $"DocumentContent:{catalogPath}",
-                ProcessingStep.Content,
-                cancellationToken);
+            const int maxGenerationAttempts = 5;
+            for (var attempt = 1; attempt <= maxGenerationAttempts; attempt++)
+            {
+                await ExecuteAgentWithRetryAsync(
+                    _options.ContentModel,
+                    _options.GetContentRequestOptions(),
+                    prompt,
+                    userMessage,
+                    tools,
+                    $"DocumentContent:{catalogPath}:attempt{attempt}",
+                    ProcessingStep.Content,
+                    cancellationToken);
 
-            stopwatch.Stop();
-            _logger.LogInformation(
-                "Document content generation completed. Path: {Path}, Title: {Title}, Duration: {Duration}ms",
-                catalogPath, catalogTitle, stopwatch.ElapsedMilliseconds);
+                if (await HasValidGeneratedDocumentAsync(context, branchLanguage.Id, catalogPath, cancellationToken))
+                {
+                    stopwatch.Stop();
+                    _logger.LogInformation(
+                        "Document content generation completed. Path: {Path}, Title: {Title}, Attempt: {Attempt}/{MaxAttempts}, Duration: {Duration}ms",
+                        catalogPath, catalogTitle, attempt, maxGenerationAttempts, stopwatch.ElapsedMilliseconds);
+                    return;
+                }
+
+                _logger.LogWarning(
+                    "Generated document invalid or empty, will retry. Path: {Path}, Title: {Title}, Attempt: {Attempt}/{MaxAttempts}",
+                    catalogPath, catalogTitle, attempt, maxGenerationAttempts);
+
+                if (attempt < maxGenerationAttempts)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"文档生成结果无效或为空，已重试{maxGenerationAttempts}次: {catalogPath}");
         }
         catch (Exception ex)
         {
@@ -743,6 +875,32 @@ Please start executing the task.";
                 catalogPath, catalogTitle, stopwatch.ElapsedMilliseconds);
             throw;
         }
+    }
+
+    private static async Task<bool> HasValidGeneratedDocumentAsync(
+        IContext context,
+        string branchLanguageId,
+        string catalogPath,
+        CancellationToken cancellationToken)
+    {
+        var catalog = await context.DocCatalogs
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                c => c.BranchLanguageId == branchLanguageId &&
+                     c.Path == catalogPath &&
+                     !c.IsDeleted,
+                cancellationToken);
+
+        if (catalog?.DocFileId is null)
+        {
+            return false;
+        }
+
+        var docFile = await context.DocFiles
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == catalog.DocFileId && !d.IsDeleted, cancellationToken);
+
+        return !string.IsNullOrWhiteSpace(docFile?.Content);
     }
 
 
@@ -984,9 +1142,16 @@ Please start executing the task.";
                     "Streaming response completed. Operation: {Operation}, ContentLength: {Length}",
                     operationName, contentBuilder.Length);
 
+                if (RequiresToolExecution(operationName) && toolCallCount == 0)
+                {
+                    throw new ToolCallNotExecutedException(
+                        $"Operation {operationName} completed without tool calls.");
+                }
+
                 return;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && IsTransientException(ex))
+            catch (Exception ex) when (ex is not OperationCanceledException &&
+                                       (IsTransientException(ex) || ex is ToolCallNotExecutedException))
             {
                 attemptStopwatch.Stop();
                 lastException = ex;
@@ -1061,6 +1226,14 @@ Please start executing the task.";
                message.Contains("network") ||
                message.Contains("response ended prematurely");
     }
+
+    private static bool RequiresToolExecution(string operationName)
+    {
+        return operationName.StartsWith("DocumentContent:", StringComparison.OrdinalIgnoreCase)
+               || operationName.StartsWith("CatalogGeneration", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class ToolCallNotExecutedException(string message) : Exception(message);
 
     /// <summary>
     /// Extracts all catalog paths and titles from the catalog JSON.
@@ -1270,24 +1443,8 @@ Please start executing the task.";
             await LogProcessingAsync(ProcessingStep.Translation, 
                 $"发现 {totalDocs} 个文档需要翻译 -> {targetLanguageCode}", cancellationToken);
 
-            // 6. 批量预加载所有需要的数据（优化 N+1 查询）
+            // 6. 批量加载目标语言目录
             var catalogPaths = catalogItems.Select(i => i.Path).ToList();
-
-            // 批量加载源语言的目录和文档
-            var sourceCatalogs = await _context.DocCatalogs
-                .Where(c => c.BranchLanguageId == sourceBranchLanguage.Id &&
-                           catalogPaths.Contains(c.Path) &&
-                           !c.IsDeleted)
-                .ToListAsync(cancellationToken);
-
-            var sourceDocFileIds = sourceCatalogs
-                .Where(c => !string.IsNullOrEmpty(c.DocFileId))
-                .Select(c => c.DocFileId!)
-                .ToList();
-
-            var sourceDocFiles = await _context.DocFiles
-                .Where(d => sourceDocFileIds.Contains(d.Id) && !d.IsDeleted)
-                .ToDictionaryAsync(d => d.Id, cancellationToken);
 
             // 批量加载目标语言的目录
             var targetCatalogs = await _context.DocCatalogs
@@ -1300,27 +1457,29 @@ Please start executing the task.";
             var translationTasks = new List<((string Path, string Title) Item, string SourceContent, DocCatalog TargetCatalog)>();
             foreach (var item in catalogItems)
             {
-                var sourceCatalog = sourceCatalogs.FirstOrDefault(c => c.Path == item.Path);
-                if (sourceCatalog == null || string.IsNullOrEmpty(sourceCatalog.DocFileId))
+                var sourceContent = await TryLoadOrRegenerateSourceDocumentContentAsync(
+                    workspace,
+                    sourceBranchLanguage,
+                    item.Path,
+                    cancellationToken);
+                if (string.IsNullOrEmpty(sourceContent))
                 {
-                    _logger.LogWarning("Source document not found for path: {Path}", item.Path);
-                    continue;
-                }
-
-                if (!sourceDocFiles.TryGetValue(sourceCatalog.DocFileId, out var sourceDocFile) ||
-                    string.IsNullOrEmpty(sourceDocFile.Content))
-                {
-                    _logger.LogWarning("Source document content not found for path: {Path}", item.Path);
+                    failedCount++;
+                    await LogProcessingAsync(
+                        ProcessingStep.Translation,
+                        $"源文档缺失，已重试5次仍失败: {item.Title}",
+                        cancellationToken);
                     continue;
                 }
 
                 if (!targetCatalogs.TryGetValue(item.Path, out var targetCatalog))
                 {
                     _logger.LogWarning("Target catalog not found for path: {Path}", item.Path);
+                    failedCount++;
                     continue;
                 }
 
-                translationTasks.Add((item, sourceDocFile.Content, targetCatalog));
+                translationTasks.Add((item, sourceContent, targetCatalog));
             }
 
             // 7. 并行执行 AI 翻译（IO 密集型操作）
@@ -1426,14 +1585,16 @@ Please start executing the task.";
 
             await _context.SaveChangesAsync(cancellationToken);
 
+            var successCount = translationResults.Count(r => r.HasValue);
+
             stopwatch.Stop();
             _logger.LogInformation(
                 "Wiki translation completed. Repository: {Org}/{Repo}, TargetLanguage: {TargetLang}, Success: {Success}, Failed: {Failed}, Duration: {Duration}ms",
                 workspace.Organization, workspace.RepositoryName, targetLanguageCode,
-                translatedCount - failedCount, failedCount, stopwatch.ElapsedMilliseconds);
+                successCount, failedCount, stopwatch.ElapsedMilliseconds);
 
             await LogProcessingAsync(ProcessingStep.Translation, 
-                $"翻译完成 -> {targetLanguageCode}，成功: {translatedCount - failedCount}，失败: {failedCount}，耗时: {stopwatch.ElapsedMilliseconds}ms", 
+                $"翻译完成 -> {targetLanguageCode}，成功: {successCount}，失败: {failedCount}，耗时: {stopwatch.ElapsedMilliseconds}ms", 
                 cancellationToken);
 
             return targetBranchLanguage;
@@ -1446,6 +1607,68 @@ Please start executing the task.";
                 workspace.Organization, workspace.RepositoryName, targetLanguageCode, stopwatch.ElapsedMilliseconds);
             throw;
         }
+    }
+
+    private async Task<string?> TryLoadOrRegenerateSourceDocumentContentAsync(
+        RepositoryWorkspace workspace,
+        BranchLanguage sourceBranchLanguage,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        const int maxRetries = 5;
+        for (var attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            var sourceCatalog = await _context.DocCatalogs
+                .AsNoTracking()
+                .FirstOrDefaultAsync(
+                    c => c.BranchLanguageId == sourceBranchLanguage.Id &&
+                         c.Path == path &&
+                         !c.IsDeleted,
+                    cancellationToken);
+
+            if (sourceCatalog?.DocFileId is not null)
+            {
+                var sourceDocFile = await _context.DocFiles
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(
+                        d => d.Id == sourceCatalog.DocFileId && !d.IsDeleted,
+                        cancellationToken);
+
+                if (!string.IsNullOrEmpty(sourceDocFile?.Content))
+                {
+                    if (attempt > 1)
+                    {
+                        _logger.LogInformation(
+                            "Source document recovered after retry. Path: {Path}, Attempt: {Attempt}",
+                            path, attempt);
+                    }
+
+                    return sourceDocFile.Content;
+                }
+            }
+
+            _logger.LogWarning(
+                "Source document not found for path: {Path}, retry {Attempt}/{MaxRetries}",
+                path, attempt, maxRetries);
+
+            try
+            {
+                await RegenerateDocumentAsync(workspace, sourceBranchLanguage, path, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex,
+                    "Regenerate source document failed during translation. Path: {Path}, Attempt: {Attempt}/{MaxRetries}",
+                    path, attempt, maxRetries);
+            }
+
+            if (attempt < maxRetries)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

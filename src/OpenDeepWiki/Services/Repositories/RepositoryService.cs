@@ -233,12 +233,15 @@ public class RepositoryService(
         }
         else if (sortBy?.Equals("status", StringComparison.OrdinalIgnoreCase) == true)
         {
-            // 状态排序优先级: Processing(1) > Pending(0) > Completed(2) > Failed(3)
+            // 状态排序优先级: Processing > Pending > PartialFailed > Failed > CompletedNoDocs > Empty > Completed
             // 使用自定义排序权重
             orderedQuery = query.OrderBy(r => 
                 r.Status == RepositoryStatus.Processing ? 0 :
                 r.Status == RepositoryStatus.Pending ? 1 :
-                r.Status == RepositoryStatus.Completed ? 2 : 3)
+                r.Status == RepositoryStatus.PartialFailed ? 2 :
+                r.Status == RepositoryStatus.Failed ? 3 :
+                r.Status == RepositoryStatus.CompletedNoDocs ? 4 :
+                r.Status == RepositoryStatus.Empty ? 5 : 6)
                 .ThenByDescending(r => r.CreatedAt);
         }
         else
@@ -250,6 +253,26 @@ public class RepositoryService(
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync();
+
+        var repositoryIds = repositories.Select(r => r.Id).ToList();
+        var repositoryIdsWithDocs = await context.DocCatalogs
+            .AsNoTracking()
+            .Where(c => !c.IsDeleted)
+            .Join(
+                context.BranchLanguages.AsNoTracking(),
+                c => c.BranchLanguageId,
+                l => l.Id,
+                (c, l) => l)
+            .Join(
+                context.RepositoryBranches.AsNoTracking(),
+                l => l.RepositoryBranchId,
+                b => b.Id,
+                (l, b) => b.RepositoryId)
+            .Where(repositoryId => repositoryIds.Contains(repositoryId))
+            .Distinct()
+            .ToListAsync();
+
+        var hasDocsSet = repositoryIdsWithDocs.ToHashSet();
 
         return new RepositoryListResponse
         {
@@ -265,6 +288,7 @@ public class RepositoryService(
                 Status = r.Status,
                 IsPublic = r.IsPublic,
                 HasPassword = !string.IsNullOrWhiteSpace(r.AuthPassword),
+                HasDocs = hasDocsSet.Contains(r.Id),
                 CreatedAt = r.CreatedAt,
                 UpdatedAt = r.UpdatedAt,
                 StarCount = r.StarCount,
@@ -454,8 +478,8 @@ public class RepositoryService(
             }
         }
 
-        // 只有失败或完成状态才能重新生成
-        if (repository.Status != RepositoryStatus.Failed && repository.Status != RepositoryStatus.Completed)
+        // 只有终态才允许重新生成
+        if (repository.Status == RepositoryStatus.Pending || repository.Status == RepositoryStatus.Processing)
         {
             return new RegenerateResponse
             {
