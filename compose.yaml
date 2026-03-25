@@ -7,12 +7,6 @@
     ports:
       - "8080:8080"
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
     environment:
       # ASP.NET Core 环境
       - ASPNETCORE_ENVIRONMENT=Production
@@ -31,20 +25,20 @@
       - REPOSITORIES_DIRECTORY=/data
 
       # AI 服务配置 (全局默认，用于 Chat 等功能)
-      - CHAT_API_KEY=your-chat-api-key
-      - ENDPOINT=https://api.openai.com/v1
+      - CHAT_API_KEY=dummy
+      - ENDPOINT=https://vllm.phison.com/gpt-oss-120b/v1
       - CHAT_REQUEST_TYPE=OpenAI
 
       # Wiki 生成器配置 - 目录生成
-      - WIKI_CATALOG_MODEL=gpt-4o
-      - WIKI_CATALOG_ENDPOINT=https://api.openai.com/v1
-      - WIKI_CATALOG_API_KEY=your-catalog-api-key
+      - WIKI_CATALOG_MODEL=openai/gpt-oss-120b
+      - WIKI_CATALOG_ENDPOINT=https://vllm.phison.com/gpt-oss-120b/v1
+      - WIKI_CATALOG_API_KEY=dummy
       - WIKI_CATALOG_REQUEST_TYPE=OpenAI
 
       # Wiki 生成器配置 - 内容生成
-      - WIKI_CONTENT_MODEL=gpt-4o
-      - WIKI_CONTENT_ENDPOINT=https://api.openai.com/v1
-      - WIKI_CONTENT_API_KEY=your-content-api-key
+      - WIKI_CONTENT_MODEL=openai/gpt-oss-120b
+      - WIKI_CONTENT_ENDPOINT=https://vllm.phison.com/gpt-oss-120b/v1
+      - WIKI_CONTENT_API_KEY=dummy
       - WIKI_CONTENT_REQUEST_TYPE=OpenAI
 
       # Wiki 生成器配置 - 翻译 (可选，不配置则使用内容生成配置)
@@ -60,6 +54,7 @@
       - WIKI_LANGUAGES=en,zh
     volumes:
       - ./data:/data
+      - ./src/OpenDeepWiki/prompts:/app/prompts
 
   web:
     image: crpi-j9ha7sxwhatgtvj4.cn-shenzhen.personal.cr.aliyuncs.com/open-deepwiki/opendeepwiki-web
@@ -70,8 +65,7 @@
       - "3000:3000"
     restart: unless-stopped
     depends_on:
-      opendeepwiki:
-        condition: service_healthy
+      - opendeepwiki
     environment:
       - NODE_ENV=production
       - API_PROXY_URL=http://opendeepwiki:8080
