@@ -1,6 +1,8 @@
 export interface RepoTreeNode {
   title: string;
   slug: string;
+  hasContent: boolean;
+  targetSlug?: string;
   children: RepoTreeNode[];
 }
 
@@ -56,7 +58,14 @@ export interface RepoHeading {
 }
 
 // Repository submission and list types
-export type RepositoryStatus = "Pending" | "Processing" | "Completed" | "Failed";
+export type RepositoryStatus =
+  | "Pending"
+  | "Processing"
+  | "Completed"
+  | "Failed"
+  | "CompletedNoDocs"
+  | "Empty"
+  | "PartialFailed";
 
 export interface RepositorySubmitRequest {
   gitUrl: string;
@@ -99,6 +108,7 @@ export interface RepositoryItemResponse {
   statusName: RepositoryStatus;
   isPublic: boolean;
   hasPassword: boolean;  // 新增：是否设置了密码，用于判断是否可设为私有
+  hasDocs: boolean;
   createdAt: string;
   updatedAt?: string;
   starCount?: number;

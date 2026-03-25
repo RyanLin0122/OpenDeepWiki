@@ -16,6 +16,7 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
   GitBranch,
   Calendar,
   Bookmark,
@@ -48,6 +49,21 @@ const STATUS_CONFIG: Record<RepositoryStatus, {
     icon: CheckCircle2,
     className: "text-green-500 bg-green-500/10",
     labelKey: "completed",
+  },
+  CompletedNoDocs: {
+    icon: AlertTriangle,
+    className: "text-amber-500 bg-amber-500/10",
+    labelKey: "completedNoDocs",
+  },
+  Empty: {
+    icon: AlertTriangle,
+    className: "text-slate-500 bg-slate-500/10",
+    labelKey: "empty",
+  },
+  PartialFailed: {
+    icon: AlertTriangle,
+    className: "text-orange-500 bg-orange-500/10",
+    labelKey: "partialFailed",
   },
   Failed: {
     icon: XCircle,
