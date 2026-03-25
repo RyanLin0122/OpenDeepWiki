@@ -78,10 +78,10 @@ public class LoggingHttpHandler(HttpMessageHandler innerHandler) : DelegatingHan
                 $"[{requestId}] <<< 响应完成: {(int)response.StatusCode} {response.StatusCode} | 耗时: {totalElapsed.TotalMilliseconds:F0}ms | 尝试次数: {attempt}");
 
             var responseContent = await ReadAndPreserveContentAsync(response, cancellationToken);
-            if (!string.IsNullOrWhiteSpace(responseContent))
-            {
-                WriteYellowLine($"[{requestId}] <<< 响应JSON: {responseContent}");
-            }
+            //if (!string.IsNullOrWhiteSpace(responseContent))
+            //{
+            //    WriteYellowLine($"[{requestId}] <<< 响应JSON: {responseContent}");
+            //}
 
             if (!response.IsSuccessStatusCode && !string.IsNullOrWhiteSpace(responseContent))
             {

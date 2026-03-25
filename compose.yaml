@@ -51,7 +51,7 @@
       - WIKI_PARALLEL_COUNT=5
 
       # 多语言支持 (逗号分隔，如: en,zh,ja,ko)
-      - WIKI_LANGUAGES=en,zh
+      - WIKI_LANGUAGES=zh
     volumes:
       - ./data:/data
       - ./src/OpenDeepWiki/prompts:/app/prompts
