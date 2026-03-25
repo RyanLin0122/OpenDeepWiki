@@ -1037,9 +1037,16 @@ Please start executing the task.";
                     "Streaming response completed. Operation: {Operation}, ContentLength: {Length}",
                     operationName, contentBuilder.Length);
 
+                if (RequiresToolExecution(operationName) && toolCallCount == 0)
+                {
+                    throw new ToolCallNotExecutedException(
+                        $"Operation {operationName} completed without tool calls.");
+                }
+
                 return;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && IsTransientException(ex))
+            catch (Exception ex) when (ex is not OperationCanceledException &&
+                                       (IsTransientException(ex) || ex is ToolCallNotExecutedException))
             {
                 attemptStopwatch.Stop();
                 lastException = ex;
@@ -1114,6 +1121,14 @@ Please start executing the task.";
                message.Contains("network") ||
                message.Contains("response ended prematurely");
     }
+
+    private static bool RequiresToolExecution(string operationName)
+    {
+        return operationName.StartsWith("DocumentContent:", StringComparison.OrdinalIgnoreCase)
+               || operationName.StartsWith("CatalogGeneration", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class ToolCallNotExecutedException(string message) : Exception(message);
 
     /// <summary>
     /// Extracts all catalog paths and titles from the catalog JSON.
